@@ -60,6 +60,35 @@ async def log_action(action: str):
         # Fail silently if logging fails
         pass
 
+# ---- Cases ----
+async def list_web_cases(project_id: int, keyword: str = ""):
+    params = {"q": keyword} if keyword else {}
+    async with httpx.AsyncClient(timeout=10.0) as client:
+        r = await client.get(f"{base_url()}/projects/{project_id}/webcases", params=params)
+        r.raise_for_status()
+        return r.json()
+
+async def list_app_cases(project_id: int, keyword: str = ""):
+    params = {"q": keyword} if keyword else {}
+    async with httpx.AsyncClient(timeout=10.0) as client:
+        r = await client.get(f"{base_url()}/projects/{project_id}/appcases", params=params)
+        r.raise_for_status()
+        return r.json()
+
+async def list_api_cases(project_id: int, keyword: str = ""):
+    params = {"q": keyword} if keyword else {}
+    async with httpx.AsyncClient(timeout=10.0) as client:
+        r = await client.get(f"{base_url()}/projects/{project_id}/apicases", params=params)
+        r.raise_for_status()
+        return r.json()
+
+async def list_project_bugs(project_id: int, keyword: str = ""):
+    params = {"q": keyword} if keyword else {}
+    async with httpx.AsyncClient(timeout=10.0) as client:
+        r = await client.get(f"{base_url()}/projects/{project_id}/bugs", params=params)
+        r.raise_for_status()
+        return r.json()
+
 # ---- Bugs ----
 async def list_bugs(keyword: str = ""):
     params = {"q": keyword} if keyword else None
