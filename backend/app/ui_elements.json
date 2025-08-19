@@ -1,0 +1,13 @@
+{
+    "url": "",
+    "username": "input[name='Username']",
+    "password": "input[name='Password']",
+    "login_button": "button:has-text('登入')",
+    "logout_link": "text='登出'",
+    "currency_code": "input[name='CurrencyCode']",
+    "currency_name": "input[name='ChineseName']",
+    "submit_button": "button:has-text('提交')",
+    "a02": "text=a02",
+    "search": "text='查詢'",
+    "decimal_places": "#DecimalPlaces"
+}

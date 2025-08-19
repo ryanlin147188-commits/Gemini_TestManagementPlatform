@@ -1,0 +1,19 @@
+{
+  "1": [
+    {
+      "test_feature": "api",
+      "method": "POST",
+      "url": "http://example.com",
+      "api_path": "/api",
+      "header": "{}",
+      "body": "{}",
+      "expected_status": "200",
+      "expected_field": "message",
+      "expected_value": "ok",
+      "result": "PASS",
+      "summary": "sum",
+      "note": "note",
+      "step": 1
+    }
+  ]
+}
