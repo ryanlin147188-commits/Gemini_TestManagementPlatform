@@ -1803,6 +1803,101 @@ def render_automation(main_area):
         ui.button('WEB 立即測試', icon='play_circle', on_click=run_web_now).props('color=primary')
         ui.button('API 立即測試', icon='play_circle', on_click=run_api_now).props('color=primary')
 
+    ui.separator().classes('my-4')
+
+    # --- Scheduling Section ---
+    ui.label('設定排程').classes('text-lg font-semibold')
+
+    with ui.row().classes('gap-2 mt-2 items-center'):
+        date_in = ui.date(value=dt.date.today()).classes('w-40')
+        time_in = ui.time(value=dt.datetime.now().strftime('%H:%M')).classes('w-28')
+
+        async def run_now_scheduled():
+            # This is the generic run function for scheduled tasks.
+            # It can be customized to run a specific suite or all tests.
+            # For now, it mirrors the original generic pytest trigger.
+            show_loading()
+            try:
+                await api.log_action("Triggered a scheduled test run.")
+                base = os.getenv('BACKEND_URL') or 'http://127.0.0.1:8000'
+                async with httpx.AsyncClient(timeout=600.0) as client:
+                    r = await client.post(f'{base}/runs/trigger-pytest')
+                    r.raise_for_status()
+                    ui.notify('已觸發排程測試', type='positive')
+            except Exception as e:
+                ui.notify(f'排程測試執行失敗: {e}', type='negative')
+            finally:
+                hide_loading()
+
+        async def schedule_run():
+            await api.log_action("User attempted to set a schedule.")
+            try:
+                d_val = date_in.value
+                t_val = time_in.value
+                if isinstance(d_val, str): d_val = dt.date.fromisoformat(d_val)
+                if isinstance(t_val, str): t_val = dt.time.fromisoformat(t_val)
+                schedule_dt = dt.datetime.combine(d_val, t_val)
+            except Exception:
+                ui.notify('排程時間格式錯誤', type='negative')
+                return
+
+            delay = (schedule_dt - dt.datetime.now()).total_seconds()
+            if delay <= 0:
+                ui.notify('排程時間必須在未來', type='warning')
+                return
+
+            ui.notify(f'排程已設定，將於 {schedule_dt} 執行', type='info')
+            state.scheduled_jobs.append({
+                'time': schedule_dt,
+                'web': list(selected_web),
+                'app': list(selected_app),
+                'api': list(selected_api)
+            })
+            refresh_schedules()
+
+            async def later():
+                await asyncio.sleep(delay)
+                await run_now_scheduled()
+
+            asyncio.create_task(later())
+
+        ui.button('設定排程', icon='schedule', on_click=schedule_run).props('color=secondary')
+
+    # --- Scheduled Jobs List ---
+    ui.label('已排程工作').classes('text-lg font-semibold mt-4')
+    schedule_list = ui.column().classes('mt-2 gap-1')
+
+    def refresh_schedules():
+        schedule_list.clear()
+        if not state.scheduled_jobs:
+            with schedule_list:
+                ui.label('尚無排程').classes('muted')
+            return
+        # Sort jobs by time before displaying
+        sorted_jobs = sorted(state.scheduled_jobs, key=lambda j: j['time'])
+        state.scheduled_jobs = sorted_jobs
+
+        for idx, job in enumerate(sorted_jobs):
+            dt_str = job['time'].strftime('%Y-%m-%d %H:%M')
+            with schedule_list:
+                with ui.row().classes('items-center gap-2 p-1 rounded-md hover:bg-gray-100 w-full'):
+                    with ui.column().classes('grow'):
+                        ui.label(f"排程於 {dt_str}").classes('text-sm font-medium')
+                        ui.label(f"Web: {len(job['web'])}, App: {len(job['app'])}, API: {len(job['api'])}").classes('text-xs muted')
+
+                    def _del_schedule(job_to_del=job):
+                        show_loading()
+                        try:
+                            state.scheduled_jobs.remove(job_to_del)
+                            refresh_schedules()
+                            ui.notify('已刪除排程', type='positive')
+                        finally:
+                            hide_loading()
+                    ui.button(icon='delete', on_click=_del_schedule).props('flat dense color=negative')
+
+    # Initial render of the schedule list
+    refresh_schedules()
+
     # --- Log Area and WebSocket ---
     with ui.row().classes('w-full items-center justify-between mt-4'):
         ui.label('執行過程紀錄').classes('text-lg font-semibold')
