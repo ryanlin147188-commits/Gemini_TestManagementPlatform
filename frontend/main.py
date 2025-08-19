@@ -452,31 +452,46 @@ def render_projects(main_area):
                     ui.button('儲存', color='primary', on_click=save)
         d.open()
 
-    # Load projects
-    items = read_projects()
-
     # ---- Search bar ----
     with ui.row().classes('gap-2 items-end flex-wrap'):
         name_in = ui.input('專案名稱').props('dense outlined').classes('min-w-[200px]')
-        owner_in = ui.input('人員').props('dense outlined').classes('min-w-[160px]')
-        status_in = ui.select(['', '新增', '進行中', '暫停', '完成'], label='專案狀態').props('dense outlined').classes('min-w-[150px]')
+        # The other search inputs are not supported by the backend, so we remove them for now.
+        # owner_in = ui.input('人員').props('dense outlined').classes('min-w-[160px]')
+        # status_in = ui.select(['', '新增', '進行中', '暫停', '完成'], label='專案狀態').props('dense outlined').classes('min-w-[150px]')
         name_in.value = state.prj_kw
-        owner_in.value = state.prj_owner
-        status_in.value = state.prj_status
+        # owner_in.value = state.prj_owner
+        # status_in.value = state.prj_status
 
-        def do_query():
-            state.prj_kw = name_in.value or ''
-            state.prj_owner = owner_in.value or ''
-            state.prj_status = status_in.value or ''
-            state.prj_page = 1
-            refresh()
+        async def do_query():
+            show_loading()
+            try:
+                state.prj_kw = name_in.value or ''
+                # The backend only supports keyword search, so other filters are not passed.
+                # state.prj_owner = owner_in.value or ''
+                # state.prj_status = status_in.value or ''
+                state.prj_page = 1
+                # Fetch data from backend API
+                state.projects = await api.list_projects(keyword=state.prj_kw)
+                await api.log_action(f"Searched projects with keyword: {state.prj_kw}")
+                refresh()
+                ui.notify('查詢完成', type='positive')
+            except Exception as e:
+                ui.notify(f'查詢失敗: {e}', type='negative')
+            finally:
+                hide_loading()
 
-        def do_clear():
-            state.prj_kw = ''
-            state.prj_owner = ''
-            state.prj_status = ''
-            state.prj_page = 1
-            refresh()
+        async def do_clear():
+            show_loading()
+            try:
+                state.prj_kw = ''
+                name_in.value = ''
+                # state.prj_owner = ''
+                # state.prj_status = ''
+                state.prj_page = 1
+                state.projects = await api.list_projects() # Fetch all
+                refresh()
+            finally:
+                hide_loading()
 
         ui.button('查詢', icon='search', on_click=do_query).props('color=primary')
         ui.button('清除搜尋條件', icon='backspace', on_click=do_clear).props('flat')
@@ -487,40 +502,44 @@ def render_projects(main_area):
     ui.space().classes('h-2')
 
     # ---- Filter + Pagination ----
-    def match(p):
-        kw = (state.prj_kw or '').lower()
-        ok_kw = (not kw) or (kw in str(p.get('name','')).lower())
-        ok_owner = (not state.prj_owner) or (state.prj_owner.lower() in str(p.get('owner','')).lower())
-        ok_status = (not state.prj_status) or (state.prj_status == p.get('status'))
-        return ok_kw and ok_owner and ok_status
-
-    filtered = [p for p in items if match(p)]
+    # The filtering is now done by the backend API.
+    # The 'items' variable is now populated by do_query/do_clear into state.projects
+    items = state.projects or []
 
     page_size = max(1, int(state.prj_page_size or 10))
-    total = len(filtered)
+    total = len(items)
     max_page = max(1, (total + page_size - 1) // page_size)
     state.prj_page = min(max(1, state.prj_page), max_page)
     start = (state.prj_page - 1) * page_size
-    page_rows = filtered[start:start+page_size]
+    page_rows = items[start:start+page_size]
 
     # Bulk toolbar
     def clear_sel():
         state.prj_selected_ids.clear(); refresh()
 
-    def bulk_delete():
+    async def bulk_delete():
         ids = set(state.prj_selected_ids)
         if not ids: return
-        new_items = [x for x in items if x.get('id') not in ids]
-        write_projects(new_items)
-        state.prj_selected_ids.clear()
-        state.projects = new_items
-        if str(state.active_project_id) in {str(i) for i in ids}:
-            if new_items:
-                state.active_project_id = int(new_items[0].get('id', 1))
-                state.active_project_name = new_items[0].get('name', '未選取')
-            else:
-                state.active_project_id = 1; state.active_project_name = '未選取'
-        refresh(); ui.notify(f'已刪除 {len(ids)} 筆', type='positive')
+        show_loading()
+        try:
+            # This is a client-side delete, but for consistency, we'll use the spinner/reload pattern
+            new_items = [x for x in (state.projects or []) if x.get('id') not in ids]
+            write_projects(new_items)
+            state.prj_selected_ids.clear()
+            state.projects = new_items
+            if str(state.active_project_id) in {str(i) for i in ids}:
+                if new_items:
+                    state.active_project_id = int(new_items[0].get('id', 1))
+                    state.active_project_name = new_items[0].get('name', '未選取')
+                else:
+                    state.active_project_id = 1; state.active_project_name = '未選取'
+            await api.log_action(f"Bulk deleted {len(ids)} projects.")
+            ui.notify(f'已刪除 {len(ids)} 筆', type='positive')
+            ui.page_proxy.reload()
+        except Exception as e:
+            ui.notify(f'刪除失敗: {e}', type='negative')
+        finally:
+            hide_loading()
 
     bulk_toolbar(state.prj_selected_ids, [
         ('刪除選取', 'delete', bulk_delete),
@@ -577,20 +596,28 @@ def render_projects(main_area):
                     # 編輯按鈕
                     ui.button(icon='edit', on_click=lambda rid=rid: open_project_dialog(rid)).props('flat')
                     # 刪除按鈕
-                    def del_one(_rid=rid):
-                        new_items = [x for x in items if x.get('id') != _rid]
-                        write_projects(new_items)
-                        state.projects = new_items
-                        # 如果刪除的是目前啟用的專案，則自動切換到第一筆或清空
-                        if str(state.active_project_id) == str(_rid):
-                            if new_items:
-                                state.active_project_id = int(new_items[0].get('id', 1))
-                                state.active_project_name = new_items[0].get('name', '未選取')
-                            else:
-                                state.active_project_id = 1
-                                state.active_project_name = '未選取'
-                            load_scoped_data()
-                        refresh()
+                    async def del_one(_rid=rid):
+                        show_loading()
+                        try:
+                            new_items = [x for x in (state.projects or []) if x.get('id') != _rid]
+                            write_projects(new_items)
+                            state.projects = new_items
+                            # 如果刪除的是目前啟用的專案，則自動切換到第一筆或清空
+                            if str(state.active_project_id) == str(_rid):
+                                if new_items:
+                                    state.active_project_id = int(new_items[0].get('id', 1))
+                                    state.active_project_name = new_items[0].get('name', '未選取')
+                                else:
+                                    state.active_project_id = 1
+                                    state.active_project_name = '未選取'
+                                load_scoped_data()
+                            await api.log_action(f"Deleted project id={_rid}")
+                            ui.notify(f'已刪除專案 {_rid}', type='positive')
+                            ui.page_proxy.reload()
+                        except Exception as e:
+                            ui.notify(f'刪除失敗: {e}', type='negative')
+                        finally:
+                            hide_loading()
                     ui.button(icon='delete', on_click=del_one).props('flat')
 
         with ui.row().classes('items-center justify-between pt-2'):
@@ -604,6 +631,10 @@ def render_projects(main_area):
                         state.prj_page += 1; refresh()
                 ui.button('上一頁', icon='chevron_left', on_click=prev_page).props('flat')
                 ui.button('下一頁', icon='chevron_right', on_click=next_page).props('flat')
+
+    # Initial data load
+    if not state.projects:
+        asyncio.create_task(do_clear())
 
 def render_web_cases(main_area):
     ui.label(f'目前專案：{state.active_project_name}').classes('text-sm opacity-70')
@@ -710,32 +741,33 @@ def render_web_cases(main_area):
 
     # Search & actions
     with ui.row().classes('gap-2 items-end flex-wrap'):
-        # 僅保留單一關鍵字搜尋
         kw_in = ui.input('關鍵字（功能/敘述/頁面/元件/輸入值）').props('dense outlined').classes('min-w-[260px]')
         kw_in.value = state.web_kw
 
-        def do_query():
+        async def do_query():
             show_loading()
             try:
                 state.web_kw = kw_in.value or ''
                 state.web_page = 1
-                try:
-                    main_area.refresh()
-                except Exception:
-                    pass
+                result = await api.list_web_cases(state.active_project_id, keyword=state.web_kw)
+                state.web_list = result.get('items', [])
+                await api.log_action(f"Searched web cases with keyword: {state.web_kw}")
+                refresh()
+                ui.notify('查詢完成', type='positive')
+            except Exception as e:
+                ui.notify(f'查詢失敗: {e}', type='negative')
             finally:
                 hide_loading()
 
-        def do_clear():
+        async def do_clear():
             show_loading()
             try:
                 state.web_kw = ''
                 kw_in.value = ''
                 state.web_page = 1
-                try:
-                    main_area.refresh()
-                except Exception:
-                    pass
+                result = await api.list_web_cases(state.active_project_id)
+                state.web_list = result.get('items', [])
+                refresh()
             finally:
                 hide_loading()
 
@@ -743,13 +775,8 @@ def render_web_cases(main_area):
         ui.button('清除搜尋條件', icon='backspace', on_click=do_clear).props('flat')
         ui.button('新增', icon='add', on_click=lambda: open_dialog()).props('color=accent')
 
-    def match(r):
-        # 只根據關鍵字過濾
-        kw = (state.web_kw or '').lower()
-        kw_ok = (not kw) or any(kw in str(r.get(k,'')).lower() for k in ['feature','desc','page','element','value'])
-        return kw_ok
-
-    filtered = [r for r in items if match(r)]
+    # The filtering is now done by the backend API.
+    filtered = state.web_list or []
     page_size = 10
     total = len(filtered)
     max_page = max(1, (total+page_size-1)//page_size)
@@ -772,12 +799,20 @@ def render_web_cases(main_area):
     # Bulk toolbar
     def clear_sel():
         state.web_selected_ids.clear(); refresh()
-    def bulk_delete():
+    async def bulk_delete():
         ids = set(state.web_selected_ids)
         if not ids: return
-        new_items = [x for x in items if x.get('id') not in ids]
-        save_items(new_items)
-        ui.notify(f'已刪除 {len(ids)} 筆', type='positive')
+        show_loading()
+        try:
+            new_items = [x for x in items if x.get('id') not in ids]
+            save_items(new_items)
+            await api.log_action(f"Bulk deleted {len(ids)} web cases.")
+            ui.notify(f'已刪除 {len(ids)} 筆', type='positive')
+            ui.page_proxy.reload()
+        except Exception as e:
+            ui.notify(f'刪除失敗: {e}', type='negative')
+        finally:
+            hide_loading()
     bulk_toolbar(state.web_selected_ids, [('刪除選取','delete', bulk_delete), ('清除選取','close', clear_sel)])
 
     # Empty state
@@ -823,13 +858,28 @@ def render_web_cases(main_area):
                     s.props('readonly disable')
                 with ui.row().classes('w-28 gap-1'):
                     ui.button(icon='edit', on_click=lambda rid=rid: open_dialog(rid)).props('flat')
-                    ui.button(icon='delete', on_click=lambda rid=rid: save_items([x for x in items if x.get('id')!=rid])).props('flat')
+                    async def del_one(case_id=rid):
+                        show_loading()
+                        try:
+                            save_items([x for x in items if x.get('id') != case_id])
+                            await api.log_action(f"Deleted web case id={case_id}")
+                            ui.notify(f'已刪除案例 {case_id}', type='positive')
+                            ui.page_proxy.reload()
+                        except Exception as e:
+                            ui.notify(f'刪除失敗: {e}', type='negative')
+                        finally:
+                            hide_loading()
+                    ui.button(icon='delete', on_click=del_one).props('flat')
 
         with ui.row().classes('items-center justify-between pt-2'):
             ui.label(f'第 {state.web_page}/{max_page} 頁 · 每頁 {page_size} 筆 · 共 {total} 筆').classes('muted')
             with ui.row().classes('gap-2'):
                 ui.button('上一頁', icon='chevron_left', on_click=lambda: (setattr(state,'web_page', max(1,state.web_page-1)), refresh())).props('flat')
                 ui.button('下一頁', icon='chevron_right', on_click=lambda: (setattr(state,'web_page', min(max_page, state.web_page+1)), refresh())).props('flat')
+
+    # Initial data load
+    if state.web_list is None:
+        asyncio.create_task(do_clear())
 
 
 
@@ -925,32 +975,33 @@ def render_app_cases(main_area):
 
     # Search & actions
     with ui.row().classes('gap-2 items-end flex-wrap'):
-        # 只保留關鍵字搜尋
         kw_in = ui.input('關鍵字（功能/敘述/頁面/元件/輸入值）').props('dense outlined').classes('min-w-[260px]')
         kw_in.value = state.app_kw
 
-        def do_query():
+        async def do_query():
             show_loading()
             try:
                 state.app_kw = kw_in.value or ''
                 state.app_page = 1
-                try:
-                    main_area.refresh()
-                except Exception:
-                    pass
+                result = await api.list_app_cases(state.active_project_id, keyword=state.app_kw)
+                state.app_list = result.get('items', [])
+                await api.log_action(f"Searched app cases with keyword: {state.app_kw}")
+                refresh()
+                ui.notify('查詢完成', type='positive')
+            except Exception as e:
+                ui.notify(f'查詢失敗: {e}', type='negative')
             finally:
                 hide_loading()
 
-        def do_clear():
+        async def do_clear():
             show_loading()
             try:
                 state.app_kw = ''
                 kw_in.value = ''
                 state.app_page = 1
-                try:
-                    main_area.refresh()
-                except Exception:
-                    pass
+                result = await api.list_app_cases(state.active_project_id)
+                state.app_list = result.get('items', [])
+                refresh()
             finally:
                 hide_loading()
 
@@ -959,12 +1010,8 @@ def render_app_cases(main_area):
         ui.button('新增', icon='add', on_click=lambda: open_dialog()).props('color=accent')
         ui.button('輸入設備資訊', icon='smartphone', on_click=lambda: open_device()).props('flat')
 
-    def match(r):
-        kw = (state.app_kw or '').lower()
-        kw_ok = (not kw) or any(kw in str(r.get(k,'')).lower() for k in ['feature','desc','page','element','value'])
-        return kw_ok
-
-    filtered = [r for r in items if match(r)]
+    # The filtering is now done by the backend API.
+    filtered = state.app_list or []
     page_size = 10
     total = len(filtered)
     max_page = max(1, (total+page_size-1)//page_size)
@@ -1001,14 +1048,18 @@ def render_app_cases(main_area):
     # Bulk toolbar
     def clear_sel():
         state.app_selected_ids.clear(); refresh()
-    def bulk_delete():
+    async def bulk_delete():
         ids = set(state.app_selected_ids)
         if not ids: return
         show_loading()
         try:
             new_items = [x for x in items if x.get('id') not in ids]
             save_items(new_items)
+            await api.log_action(f"Bulk deleted {len(ids)} app cases.")
             ui.notify(f'已刪除 {len(ids)} 筆', type='positive')
+            ui.page_proxy.reload()
+        except Exception as e:
+            ui.notify(f'刪除失敗: {e}', type='negative')
         finally:
             hide_loading()
     bulk_toolbar(state.app_selected_ids, [('刪除選取','delete', bulk_delete), ('清除選取','close', clear_sel)])
@@ -1056,11 +1107,15 @@ def render_app_cases(main_area):
                     s.props('readonly disable')
                 with ui.row().classes('w-28 gap-1'):
                     ui.button(icon='edit', on_click=lambda rid=rid: open_dialog(rid)).props('flat')
-                    def _del_one(_rid=rid):
+                    async def _del_one(_rid=rid):
                         show_loading()
                         try:
                             save_items([x for x in items if x.get('id') != _rid])
+                            await api.log_action(f"Deleted app case id={_rid}")
                             ui.notify('已刪除 1 筆', type='positive')
+                            ui.page_proxy.reload()
+                        except Exception as e:
+                            ui.notify(f'刪除失敗: {e}', type='negative')
                         finally:
                             hide_loading()
                     ui.button(icon='delete', on_click=_del_one).props('flat')
@@ -1070,6 +1125,10 @@ def render_app_cases(main_area):
             with ui.row().classes('gap-2'):
                 ui.button('上一頁', icon='chevron_left', on_click=lambda: (setattr(state,'app_page', max(1,state.app_page-1)), refresh())).props('flat')
                 ui.button('下一頁', icon='chevron_right', on_click=lambda: (setattr(state,'app_page', min(max_page, state.app_page+1)), refresh())).props('flat')
+
+    # Initial data load
+    if state.app_list is None:
+        asyncio.create_task(do_clear())
 
 
 def render_api_cases(main_area):
@@ -1167,28 +1226,30 @@ def render_api_cases(main_area):
         kw_in = ui.input('關鍵字（功能/URL/路徑/Header/Body/預期欄位/預期值）').props('dense outlined').classes('min-w-[320px]')
         kw_in.value = state.api_kw
 
-        def do_query():
+        async def do_query():
             show_loading()
             try:
                 state.api_kw = kw_in.value or ''
                 state.api_page = 1
-                try:
-                    main_area.refresh()
-                except Exception:
-                    pass
+                result = await api.list_api_cases(state.active_project_id, keyword=state.api_kw)
+                state.api_list = result.get('items', [])
+                await api.log_action(f"Searched API cases with keyword: {state.api_kw}")
+                refresh()
+                ui.notify('查詢完成', type='positive')
+            except Exception as e:
+                ui.notify(f'查詢失敗: {e}', type='negative')
             finally:
                 hide_loading()
 
-        def do_clear():
+        async def do_clear():
             show_loading()
             try:
                 state.api_kw = ''
                 kw_in.value = ''
                 state.api_page = 1
-                try:
-                    main_area.refresh()
-                except Exception:
-                    pass
+                result = await api.list_api_cases(state.active_project_id)
+                state.api_list = result.get('items', [])
+                refresh()
             finally:
                 hide_loading()
 
@@ -1196,12 +1257,8 @@ def render_api_cases(main_area):
         ui.button('清除搜尋條件', icon='backspace', on_click=do_clear).props('flat')
         ui.button('新增', icon='add', on_click=lambda: open_dialog()).props('color=accent')
 
-    def match(r):
-        kw = (state.api_kw or '').lower()
-        kw_ok = (not kw) or any(kw in str(r.get(k,'')).lower() for k in ['feature','url','api_path','header','body','expect_field','expect_value','response_summary'])
-        return kw_ok
-
-    filtered = [r for r in items if match(r)]
+    # The filtering is now done by the backend API.
+    filtered = state.api_list or []
     page_size = 10
     total = len(filtered)
     max_page = max(1, (total+page_size-1)//page_size)
@@ -1221,13 +1278,17 @@ def render_api_cases(main_area):
 
     def clear_sel():
         state.api_selected_ids.clear(); refresh()
-    def bulk_delete():
+    async def bulk_delete():
         ids = set(state.api_selected_ids)
         if not ids: return
         show_loading()
         try:
             save_items([x for x in items if x.get('step') not in ids])
+            await api.log_action(f"Bulk deleted {len(ids)} API cases.")
             ui.notify(f'已刪除 {len(ids)} 筆', type='positive')
+            ui.page_proxy.reload()
+        except Exception as e:
+            ui.notify(f'刪除失敗: {e}', type='negative')
         finally:
             hide_loading()
     bulk_toolbar(state.api_selected_ids, [('刪除選取','delete', bulk_delete), ('清除選取','close', clear_sel)])
@@ -1278,11 +1339,15 @@ def render_api_cases(main_area):
                     s.props('readonly disable')
                 with ui.row().classes('w-28 gap-1'):
                     ui.button(icon='edit', on_click=lambda sid=sid: open_dialog(sid)).props('flat')
-                    def _del_one(_sid=sid):
+                    async def _del_one(_sid=sid):
                         show_loading()
                         try:
                             save_items([x for x in items if x.get('step') != _sid])
+                            await api.log_action(f"Deleted API case step={_sid}")
                             ui.notify('已刪除 1 筆', type='positive')
+                            ui.page_proxy.reload()
+                        except Exception as e:
+                            ui.notify(f'刪除失敗: {e}', type='negative')
                         finally:
                             hide_loading()
                     ui.button(icon='delete', on_click=_del_one).props('flat')
@@ -1292,6 +1357,10 @@ def render_api_cases(main_area):
             with ui.row().classes('gap-2'):
                 ui.button('上一頁', icon='chevron_left', on_click=lambda: (setattr(state,'api_page', max(1,state.api_page-1)), refresh())).props('flat')
                 ui.button('下一頁', icon='chevron_right', on_click=lambda: (setattr(state,'api_page', min(max_page, state.api_page+1)), refresh())).props('flat')
+
+    # Initial data load
+    if state.api_list is None:
+        asyncio.create_task(do_clear())
 
 
 
@@ -1377,38 +1446,42 @@ def render_bugs(main_area):
     # Filters
     with ui.row().classes('gap-2 items-end flex-wrap'):
         kw_in = ui.input('關鍵字（問題敘述/重現步驟/預期/實際/備註）').props('dense outlined').classes('min-w-[320px]')
-        sev_sel = ui.select(['','高','中','低'], label='嚴重度').props('dense outlined')
-        st_sel = ui.select(['','新增','進行中','關閉','駁回'], label='狀態').props('dense outlined')
         kw_in.value = state.bug_filter_kw
-        # We'll reuse bug_filter_status set for狀態; severity ad-hoc via local
-        def do_query():
+        # The backend API for bugs only supports a single keyword search.
+        # sev_sel = ui.select(['','高','中','低'], label='嚴重度').props('dense outlined')
+        # st_sel = ui.select(['','新增','進行中','關閉','駁回'], label='狀態').props('dense outlined')
+
+        async def do_query():
             show_loading()
             try:
                 state.bug_filter_kw = kw_in.value or ''
-                state.bug_filter_status = set([st_sel.value]) if st_sel.value else set()
                 state.bug_page = 1
-                main_area.refresh()
+                state.bug_list = await api.list_project_bugs(state.active_project_id, keyword=state.bug_filter_kw)
+                await api.log_action(f"Searched bugs with keyword: {state.bug_filter_kw}")
+                refresh()
+                ui.notify('查詢完成', type='positive')
+            except Exception as e:
+                ui.notify(f'查詢失敗: {e}', type='negative')
             finally:
                 hide_loading()
-        def do_clear():
+
+        async def do_clear():
             show_loading()
             try:
                 state.bug_filter_kw = ''
-                state.bug_filter_status.clear(); state.bug_page = 1
-                main_area.refresh()
+                kw_in.value = ''
+                state.bug_page = 1
+                state.bug_list = await api.list_project_bugs(state.active_project_id)
+                refresh()
             finally:
                 hide_loading()
+
         ui.button('查詢', icon='search', on_click=do_query).props('color=primary')
         ui.button('清除搜尋條件', icon='backspace', on_click=do_clear).props('flat')
         ui.button('新增', icon='add', on_click=lambda: open_dialog()).props('color=accent')
 
-    def match(r):
-        kw = (state.bug_filter_kw or '').lower()
-        kw_ok = (not kw) or any(kw in str(r.get(k,'')).lower() for k in ['title','repro','expected','actual','note'])
-        st_ok = (not state.bug_filter_status) or (r.get('status') in state.bug_filter_status)
-        return kw_ok and st_ok
-
-    filtered = [r for r in items if match(r)]
+    # The filtering is now done by the backend API.
+    filtered = state.bug_list or []
     page_size = 10
     total = len(filtered)
     max_page = max(1, (total+page_size-1)//page_size)
@@ -1426,11 +1499,19 @@ def render_bugs(main_area):
 
     def clear_sel():
         state.bug_selected_ids.clear(); refresh()
-    def bulk_delete():
+    async def bulk_delete():
         ids = set(state.bug_selected_ids)
         if not ids: return
-        save_items([x for x in items if x.get('id') not in ids])
-        ui.notify(f'已刪除 {len(ids)} 筆', type='positive')
+        show_loading()
+        try:
+            save_items([x for x in items if x.get('id') not in ids])
+            await api.log_action(f"Bulk deleted {len(ids)} bugs.")
+            ui.notify(f'已刪除 {len(ids)} 筆', type='positive')
+            ui.page_proxy.reload()
+        except Exception as e:
+            ui.notify(f'刪除失敗: {e}', type='negative')
+        finally:
+            hide_loading()
     bulk_toolbar(state.bug_selected_ids, [('刪除選取','delete', bulk_delete), ('清除選取','close', clear_sel)])
 
     if not page_rows and total==0:
@@ -1477,13 +1558,28 @@ def render_bugs(main_area):
                         ui.link('查看', f"/uploads/{img}")
                 with ui.row().classes('w-28 gap-1'):
                     ui.button(icon='edit', on_click=lambda rid=rid: open_dialog(rid)).props('flat')
-                    ui.button(icon='delete', on_click=lambda rid=rid: save_items([x for x in items if x.get('id')!=rid])).props('flat')
+                    async def del_one(bug_id=rid):
+                        show_loading()
+                        try:
+                            save_items([x for x in items if x.get('id') != bug_id])
+                            await api.log_action(f"Deleted bug id={bug_id}")
+                            ui.notify(f'已刪除 BUG {bug_id}', type='positive')
+                            ui.page_proxy.reload()
+                        except Exception as e:
+                            ui.notify(f'刪除失敗: {e}', type='negative')
+                        finally:
+                            hide_loading()
+                    ui.button(icon='delete', on_click=del_one).props('flat')
 
         with ui.row().classes('items-center justify-between pt-2'):
             ui.label(f'第 {state.bug_page}/{max_page} 頁 · 每頁 {page_size} 筆 · 共 {total} 筆').classes('muted')
             with ui.row().classes('gap-2'):
                 ui.button('上一頁', icon='chevron_left', on_click=lambda: (setattr(state,'bug_page', max(1,state.bug_page-1)), refresh())).props('flat')
                 ui.button('下一頁', icon='chevron_right', on_click=lambda: (setattr(state,'bug_page', min(max_page, state.bug_page+1)), refresh())).props('flat')
+
+    # Initial data load
+    if state.bug_list is None:
+        asyncio.create_task(do_clear())
 
     def open_dialog(edit_id: int | None = None):
         editing = None
@@ -1620,11 +1716,14 @@ def render_reports(main_area):
                         with ui.row().classes('items-center gap-2'):
                             ui.label(name).classes('grow')
                             # 審核狀態下拉選單
-                            ui.select(['未審核','已審核'], value=state.report_reviews.get(path,'未審核'),
+                            is_reviewed = state.report_reviews.get(path) == '已審核'
+                            s = ui.select(['未審核','已審核'], value=state.report_reviews.get(path,'未審核'),
                                       on_change=lambda e, p=path: (
                                           state.report_reviews.__setitem__(p, e.value),
                                           ui.notify('已更新報表審核狀態', type='positive')
                                       )).props('dense').classes('w-24')
+                            if is_reviewed:
+                                s.props('readonly disable')
                             def _open(p=path, n=name):
                                 """Open an Allure report in a fixed 1920×1080 dialog.
 
@@ -1881,9 +1980,8 @@ def render_automation(main_area):
             dt_str = job['time'].strftime('%Y-%m-%d %H:%M')
             with schedule_list:
                 with ui.row().classes('items-center gap-2 p-1 rounded-md hover:bg-gray-100 w-full'):
-                    with ui.column().classes('grow'):
-                        ui.label(f"排程於 {dt_str}").classes('text-sm font-medium')
-                        ui.label(f"Web: {len(job['web'])}, App: {len(job['app'])}, API: {len(job['api'])}").classes('text-xs muted')
+                    info_text = f"排程於 {dt_str} (Web: {len(job['web'])}, App: {len(job['app'])}, API: {len(job['api'])})"
+                    ui.label(info_text).classes('text-sm grow')
 
                     def _del_schedule(job_to_del=job):
                         show_loading()
@@ -1921,7 +2019,7 @@ def render_automation(main_area):
         if state.last_run_id:
             ui.button('查看上次執行日誌', icon='history', on_click=view_last_log).props('flat')
 
-    log_area = ui.textarea(label='執行紀錄').props('readonly').classes('w-full h-60 mt-2 bg-gray-800 text-white text-xs font-mono whitespace-pre-wrap overflow-y-auto')
+    log_area = ui.textarea().props('readonly').classes('w-full h-60 mt-2 bg-gray-50 text-black text-xs font-mono whitespace-pre-wrap overflow-y-auto')
 
     async def connect_automation_log():
         try:
