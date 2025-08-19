@@ -116,6 +116,12 @@ def _collect_cases() -> List[Tuple[str, List[Dict[str, Any]]]]:
     return [(feature, steps) for feature, steps in cases_by_feature.items()]
 
 
+# Prepare cases and their IDs for pytest parametrization. This is done at the
+# module level to avoid calling _collect_cases() multiple times.
+_collected_api_cases = _collect_cases()
+_api_case_ids = [item[0] for item in _collected_api_cases]
+
+
 def _get_timeout() -> int:
     """Retrieve the request timeout in seconds from the environment.
     Defaults to 10 seconds if unset or invalid.
@@ -286,7 +292,7 @@ def http_client() -> httpx.Client:
         yield client
 
 
-@pytest.mark.parametrize("feature, steps", _collect_cases())
+@pytest.mark.parametrize("feature, steps", _collected_api_cases, ids=_api_case_ids)
 def test_api_cases(http_client: httpx.Client, feature: str, steps: List[Dict[str, Any]]) -> None:
     """Pytest entry point for API cases. Each feature becomes a test
     function. All defined steps for that feature are executed sequentially.

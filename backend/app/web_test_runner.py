@@ -283,7 +283,13 @@ def _collect_cases() -> List[Tuple[str, List[Dict[str, Any]]]]:
     return [(feature, steps) for feature, steps in cases_by_feature.items()]
 
 
-@pytest.mark.parametrize("feature, steps", _collect_cases())
+# Prepare cases and their IDs for pytest parametrization. This is done at the
+# module level to avoid calling _collect_cases() multiple times.
+_collected_web_cases = _collect_cases()
+_web_case_ids = [item[0] for item in _collected_web_cases]
+
+
+@pytest.mark.parametrize("feature, steps", _collected_web_cases, ids=_web_case_ids)
 def test_web_cases(page: Page, feature: str, steps: List[Dict[str, Any]]) -> None:
     """Pytest entry point for web UI cases. The test name will be the
     feature name, and within the test each defined step is executed in

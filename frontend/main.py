@@ -9,6 +9,7 @@ import datetime as dt
 import os
 import httpx
 import asyncio
+import api
 
 # === Theme & global styles ===
 
@@ -659,38 +660,51 @@ def render_web_cases(main_area):
                     id_input.value = str(next_id)
                 with ui.row().classes('justify-end gap-2 mt-3'):
                     ui.button('取消', on_click=d.close).props('flat')
-                    def save():
-                        data = state.web_list or []
-                        if editing:
-                            # 更新現有資料
-                            for i, p in enumerate(data):
-                                if str(p.get('id')) == str(editing.get('id')):
-                                    data[i] = {**p,
-                                               'feature': feature.value or '',
-                                               'step': step.value or '',
-                                               'action': action.value or '',
-                                               'desc': desc.value or '',
-                                               'page': page_.value or '',
-                                               'element': elem.value or '',
-                                               'value': val.value or ''}
-                                    break
-                        else:
-                            # 新增
-                            new_id = next_id
-                            data.append({
-                                'id': new_id,
-                                'feature': feature.value or '',
-                                'step': step.value or '',
-                                'action': action.value or '',
-                                'desc': desc.value or '',
-                                'page': page_.value or '',
-                                'element': elem.value or '',
-                                'value': val.value or '',
-                                'review': '未審核'
-                            })
-                        save_items(data)
-                        d.close()
-                        ui.notify('已儲存', type='positive')
+                    async def save():
+                        show_loading()
+                        try:
+                            action_desc = "created new web case"
+                            if editing:
+                                action_desc = f"updated web case id={editing.get('id')}"
+
+                            data = state.web_list or []
+                            if editing:
+                                # 更新現有資料
+                                for i, p in enumerate(data):
+                                    if str(p.get('id')) == str(editing.get('id')):
+                                        data[i] = {**p,
+                                                   'feature': feature.value or '',
+                                                   'step': step.value or '',
+                                                   'action': action.value or '',
+                                                   'desc': desc.value or '',
+                                                   'page': page_.value or '',
+                                                   'element': elem.value or '',
+                                                   'value': val.value or ''}
+                                        break
+                            else:
+                                # 新增
+                                new_id = next_id
+                                data.append({
+                                    'id': new_id,
+                                    'feature': feature.value or '',
+                                    'step': step.value or '',
+                                    'action': action.value or '',
+                                    'desc': desc.value or '',
+                                    'page': page_.value or '',
+                                    'element': elem.value or '',
+                                    'value': val.value or '',
+                                    'review': '未審核'
+                                })
+                            save_items(data)
+                            await api.log_action(action_desc)
+                            ui.notify('儲存成功！', type='positive')
+                            d.close()
+                            # Automatically refresh the page
+                            ui.page_proxy.reload()
+                        except Exception as e:
+                            ui.notify(f"儲存失敗: {e}", type='negative')
+                        finally:
+                            hide_loading()
                     ui.button('儲存', color='primary', on_click=save)
         d.open()
 
@@ -797,13 +811,16 @@ def render_web_cases(main_area):
                 ui.label(r.get('element','')).classes('w-28')
                 ui.label(r.get('value','')).classes('w-32')
                 # 審核狀態下拉選單，預設未審核/已審核
-                ui.select(['未審核','已審核'], value=r.get('review','未審核'),
+                is_reviewed = r.get('review') == '已審核'
+                s = ui.select(['未審核','已審核'], value=r.get('review','未審核'),
                           on_change=lambda e, record=r: (
                               record.update({'review': e.value}),
                               write_scoped_list(WEB_CASES_FILE, state.active_project_id, state.web_list),
                               setattr(state, 'web_list', state.web_list),
                               ui.notify('已更新審核狀態', type='positive')
                           )).props('dense').classes('w-24')
+                if is_reviewed:
+                    s.props('readonly disable')
                 with ui.row().classes('w-28 gap-1'):
                     ui.button(icon='edit', on_click=lambda rid=rid: open_dialog(rid)).props('flat')
                     ui.button(icon='delete', on_click=lambda rid=rid: save_items([x for x in items if x.get('id')!=rid])).props('flat')
@@ -860,9 +877,13 @@ def render_app_cases(main_area):
                     id_input.value = str(next_id)
                 with ui.row().classes('justify-end gap-2 mt-3'):
                     ui.button('取消', on_click=d.close).props('flat')
-                    def save():
+                    async def save():
                         show_loading()
                         try:
+                            action_desc = "created new app case"
+                            if editing:
+                                action_desc = f"updated app case id={editing.get('id')}"
+
                             data = state.app_list or []
                             if editing:
                                 for i, p in enumerate(data):
@@ -891,9 +912,12 @@ def render_app_cases(main_area):
                                 })
                             write_scoped_list(APP_CASES_FILE, state.active_project_id, data)
                             state.app_list = data
+                            await api.log_action(action_desc)
+                            ui.notify('儲存成功！', type='positive')
                             d.close()
-                            ui.notify('已儲存', type='positive')
-                            refresh()
+                            ui.page_proxy.reload()
+                        except Exception as e:
+                            ui.notify(f"儲存失敗: {e}", type='negative')
                         finally:
                             hide_loading()
                     ui.button('儲存', color='primary', on_click=save)
@@ -1020,13 +1044,16 @@ def render_app_cases(main_area):
                 ui.label(r.get('element','')).classes('w-28')
                 ui.label(r.get('value','')).classes('w-32')
                 # 審核狀態下拉選單
-                ui.select(['未審核','已審核'], value=r.get('review','未審核'),
+                is_reviewed = r.get('review') == '已審核'
+                s = ui.select(['未審核','已審核'], value=r.get('review','未審核'),
                           on_change=lambda e, record=r: (
                               record.update({'review': e.value}),
                               write_scoped_list(APP_CASES_FILE, state.active_project_id, state.app_list),
                               setattr(state, 'app_list', state.app_list),
                               ui.notify('已更新審核狀態', type='positive')
                           )).props('dense').classes('w-24')
+                if is_reviewed:
+                    s.props('readonly disable')
                 with ui.row().classes('w-28 gap-1'):
                     ui.button(icon='edit', on_click=lambda rid=rid: open_dialog(rid)).props('flat')
                     def _del_one(_rid=rid):
@@ -1092,36 +1119,47 @@ def render_api_cases(main_area):
                     response_summary.value = editing.get('response_summary','')
                 with ui.row().classes('justify-end gap-2 mt-3'):
                     ui.button('取消', on_click=d.close).props('flat')
-                    def save():
-                        data = state.api_list or []
-                        # construct record
-                        rec = {
-                            'step': int(step.value or 0) if (step.value or '').isdigit() else step.value or 0,
-                            'feature': feature.value or '',
-                            'method': method.value or '',
-                            'url': url.value or '',
-                            'api_path': api_path.value or '',
-                            'header': header.value or '',
-                            'body': body.value or '',
-                            'expect_status': int(expect_status.value or 0) if (expect_status.value or '').isdigit() else expect_status.value or '',
-                            'expect_field': expect_field.value or '',
-                            'expect_value': expect_value.value or '',
-                            'response_summary': response_summary.value or '',
-                            # 新增審核欄位，預設未審核
-                            'review': editing.get('review','未審核') if editing else '未審核'
-                        }
-                        if editing:
-                            for i,p in enumerate(data):
-                                if str(p.get('step')) == str(editing.get('step')):
-                                    data[i] = rec
-                                    break
-                        else:
-                            data.append(rec)
-                        write_scoped_list(API_CASES_FILE, state.active_project_id, data)
-                        state.api_list = data
-                        d.close()
-                        ui.notify('已儲存', type='positive')
-                        refresh()
+                    async def save():
+                        show_loading()
+                        try:
+                            action_desc = "created new api case"
+                            if editing:
+                                action_desc = f"updated api case step={editing.get('step')}"
+
+                            data = state.api_list or []
+                            # construct record
+                            rec = {
+                                'step': int(step.value or 0) if (step.value or '').isdigit() else step.value or 0,
+                                'feature': feature.value or '',
+                                'method': method.value or '',
+                                'url': url.value or '',
+                                'api_path': api_path.value or '',
+                                'header': header.value or '',
+                                'body': body.value or '',
+                                'expect_status': int(expect_status.value or 0) if (expect_status.value or '').isdigit() else expect_status.value or '',
+                                'expect_field': expect_field.value or '',
+                                'expect_value': expect_value.value or '',
+                                'response_summary': response_summary.value or '',
+                                # 新增審核欄位，預設未審核
+                                'review': editing.get('review','未審核') if editing else '未審核'
+                            }
+                            if editing:
+                                for i,p in enumerate(data):
+                                    if str(p.get('step')) == str(editing.get('step')):
+                                        data[i] = rec
+                                        break
+                            else:
+                                data.append(rec)
+                            write_scoped_list(API_CASES_FILE, state.active_project_id, data)
+                            state.api_list = data
+                            await api.log_action(action_desc)
+                            ui.notify('儲存成功！', type='positive')
+                            d.close()
+                            ui.page_proxy.reload()
+                        except Exception as e:
+                            ui.notify(f"儲存失敗: {e}", type='negative')
+                        finally:
+                            hide_loading()
                     ui.button('儲存', color='primary', on_click=save)
         d.open()
 
@@ -1228,13 +1266,16 @@ def render_api_cases(main_area):
                 ui.label(r.get('expect_value','')).classes('w-24')
                 ui.label(r.get('response_summary','')).classes('w-32')
                 # 審核狀態下拉選單，未審核/已審核
-                ui.select(['未審核','已審核'], value=r.get('review','未審核'),
+                is_reviewed = r.get('review') == '已審核'
+                s = ui.select(['未審核','已審核'], value=r.get('review','未審核'),
                           on_change=lambda e, record=r: (
                               record.update({'review': e.value}),
                               write_scoped_list(API_CASES_FILE, state.active_project_id, state.api_list),
                               setattr(state, 'api_list', state.api_list),
                               ui.notify('已更新審核狀態', type='positive')
                           )).props('dense').classes('w-24')
+                if is_reviewed:
+                    s.props('readonly disable')
                 with ui.row().classes('w-28 gap-1'):
                     ui.button(icon='edit', on_click=lambda sid=sid: open_dialog(sid)).props('flat')
                     def _del_one(_sid=sid):
@@ -1415,13 +1456,17 @@ def render_bugs(main_area):
                 with ui.element('div').classes('w-20'):
                     status_badge(r.get('severity',''), CASE_STATUS_COLORS)
                 # 狀態欄改為下拉選單，可即時更新
-                ui.select(['新增','進行中','關閉','駁回'], value=r.get('status','新增'),
+                is_reviewed = r.get('status') == '已審核'
+                options = ['新增','進行中','關閉','駁回', '已審核']
+                s = ui.select(options, value=r.get('status','新增'),
                           on_change=lambda e, record=r: (
                               record.update({'status': e.value}),
                               write_scoped_list(BUGS_FILE, state.active_project_id, state.bug_list),
                               setattr(state, 'bug_list', state.bug_list),
                               ui.notify('已更新狀態', type='positive')
                           )).props('dense').classes('w-24')
+                if is_reviewed:
+                    s.props('readonly disable')
                 ui.label(r.get('repro','')).classes('w-[20%]')
                 ui.label(r.get('expected','')).classes('w-[18%]')
                 ui.label(r.get('actual','')).classes('w-[18%]')
@@ -1473,18 +1518,33 @@ def render_bugs(main_area):
                     upload_name.text = editing.get('screenshot','') or ''
                 with ui.row().classes('justify-end gap-2 mt-3'):
                     ui.button('取消', on_click=d.close).props('flat')
-                    def save():
-                        data = state.bug_list or []
-                        rec = {'id': (editing.get('id') if editing else (max([int(p.get('id',0)) for p in data] + [0]) + 1)),
-                               'title': title.value or '', 'severity': severity.value or '中', 'status': status.value or '新增',
-                               'repro': repro.value or '', 'expected': expected.value or '', 'actual': actual.value or '',
-                               'note': note.value or '', 'screenshot': upload_name.text or ''}
-                        if editing:
-                            for i,p in enumerate(data):
-                                if str(p.get('id'))==str(editing.get('id')): data[i] = rec; break
-                        else:
-                            data.append(rec)
-                        save_items(data); d.close(); ui.notify('已儲存', type='positive')
+                    async def save():
+                        show_loading()
+                        try:
+                            action_desc = "created new bug"
+                            if editing:
+                                action_desc = f"updated bug id={editing.get('id')}"
+
+                            data = state.bug_list or []
+                            rec = {'id': (editing.get('id') if editing else (max([int(p.get('id',0)) for p in data] + [0]) + 1)),
+                                   'title': title.value or '', 'severity': severity.value or '中', 'status': status.value or '新增',
+                                   'repro': repro.value or '', 'expected': expected.value or '', 'actual': actual.value or '',
+                                   'note': note.value or '', 'screenshot': upload_name.text or ''}
+                            if editing:
+                                for i,p in enumerate(data):
+                                    if str(p.get('id'))==str(editing.get('id')): data[i] = rec; break
+                            else:
+                                data.append(rec)
+
+                            save_items(data)
+                            await api.log_action(action_desc)
+                            ui.notify('儲存成功！', type='positive')
+                            d.close()
+                            ui.page_proxy.reload()
+                        except Exception as e:
+                            ui.notify(f"儲存失敗: {e}", type='negative')
+                        finally:
+                            hide_loading()
                     ui.button('儲存', color='primary', on_click=save)
         d.open()
 
@@ -1613,225 +1673,182 @@ def render_automation(main_area):
     """
     ui.label(f'目前專案：{state.active_project_name}').classes('text-sm opacity-70')
     ui.separator()
-    web_cases = read_scoped_list(WEB_CASES_FILE, state.active_project_id) or []
-    app_cases = read_scoped_list(APP_CASES_FILE, state.active_project_id) or []
-    api_cases = read_scoped_list(API_CASES_FILE, state.active_project_id) or []
-    # hold scheduled jobs; each entry contains schedule datetime and selected case ids
-    # Use state to persist across page refreshes
+
+    # --- State and Helper functions ---
     if not hasattr(state, 'scheduled_jobs'):
         state.scheduled_jobs = []
-    scheduled_jobs = state.scheduled_jobs
-    # UI container for scheduled jobs
+    if not hasattr(state, 'last_run_id'):
+        state.last_run_id = None
+
+    selected_web: set[int] = set()
+    selected_app: set[int] = set()
+    selected_api: set[int] = set()
+
+    def toggle_sel(s: set, val: int):
+        if val in s:
+            s.remove(val)
+        else:
+            s.add(val)
+
+    async def show_completion_dialog(title: str, message: str):
+        with ui.dialog() as d, ui.card():
+            ui.label(title).classes('text-lg font-bold')
+            ui.label(message)
+            with ui.row().classes('justify-end w-full mt-2'):
+                ui.button('關閉', on_click=d.close).props('color=primary')
+        await d
+
+    # --- UI Components ---
     schedule_list = ui.column().classes('mt-4 gap-1')
+    web_cases_expansion = ui.expansion('選取 WEB 案例', value=False)
+    app_cases_expansion = ui.expansion('選取 APP 案例', value=False)
+    api_cases_expansion = ui.expansion('選取 API 案例', value=False)
+
+    # --- Data Loading and Rendering ---
     def refresh_schedules():
-        """
-        Refresh the list of scheduled jobs displayed in the automation page.
-        This clears the existing children of the schedule_list column and
-        re-populates it using the current `scheduled_jobs` list. When
-        there are no scheduled jobs, a placeholder text is shown instead.
-        """
         schedule_list.clear()
-        if not scheduled_jobs:
-            # Display placeholder when there are no schedules
+        if not state.scheduled_jobs:
             with schedule_list:
                 ui.label('尚無排程').classes('muted')
             return
-        for idx, job in enumerate(scheduled_jobs):
+        for idx, job in enumerate(state.scheduled_jobs):
             dt_str = job['time'].strftime('%Y-%m-%d %H:%M')
             with schedule_list:
                 with ui.row().classes('items-center gap-2'):
                     ui.label(
                         f"排程於 {dt_str} 執行 (Web: {len(job['web'])} / App: {len(job['app'])} / API: {len(job['api'])})"
                     ).classes('text-sm')
-                    # 刪除排程按鈕
                     def _del_schedule(_idx=idx):
                         show_loading()
                         try:
-                            scheduled_jobs.pop(_idx)
-                            state.scheduled_jobs = scheduled_jobs
+                            state.scheduled_jobs.pop(_idx)
                             refresh_schedules()
                             ui.notify('已刪除排程', type='positive')
                         finally:
                             hide_loading()
                     ui.button(icon='delete', on_click=_del_schedule).props('flat color=negative')
 
-    # initial scheduled job list display
+    async def load_and_render_cases():
+        try:
+            web_cases = await api.list_web_case_names(state.active_project_id)
+            app_cases = await api.list_app_case_names(state.active_project_id)
+            api_cases = await api.list_api_case_names(state.active_project_id)
+
+            for expansion, cases, selection_set in [
+                (web_cases_expansion, web_cases, selected_web),
+                (app_cases_expansion, app_cases, selected_app),
+                (api_cases_expansion, api_cases, selected_api),
+            ]:
+                expansion.clear()
+                with expansion:
+                    for r in cases:
+                        rid_str = r.get('id') or r.get('step')
+                        try:
+                            rid = int(rid_str)
+                            name = r.get('name', '無名稱案例')
+                            with ui.row().classes('items-center gap-2'):
+                                ui.checkbox(value=(rid in selection_set), on_change=lambda e, r_id=rid, s=selection_set: toggle_sel(s, r_id))
+                                ui.label(f"{rid} - {name}")
+                        except (ValueError, TypeError):
+                            continue
+        except Exception as e:
+            ui.notify(f'讀取案例列表失敗: {e}', type='negative')
+
     refresh_schedules()
-    selected_web: set[int] = set()
-    selected_app: set[int] = set()
-    selected_api: set[int] = set()
-    def toggle_sel(s: set, val: int):
-        if val in s: s.remove(val)
-        else: s.add(val)
-    with ui.expansion('選取 WEB 案例', value=False):
-        for r in web_cases:
-            rid = int(r.get('id', 0))
-            with ui.row().classes('items-center gap-2'):
-                ui.checkbox(value=(rid in selected_web), on_change=lambda e, rid=rid: toggle_sel(selected_web, rid))
-                ui.label(f"{rid} - {r.get('feature','')}")
-    with ui.expansion('選取 APP 案例', value=False):
-        for r in app_cases:
-            rid = int(r.get('id', 0))
-            with ui.row().classes('items-center gap-2'):
-                ui.checkbox(value=(rid in selected_app), on_change=lambda e, rid=rid: toggle_sel(selected_app, rid))
-                ui.label(f"{rid} - {r.get('feature','')}")
-    with ui.expansion('選取 API 案例', value=False):
-        for r in api_cases:
-            rid = r.get('step') or r.get('id')
-            try:
-                rid = int(rid)
-            except Exception:
-                pass
-            with ui.row().classes('items-center gap-2'):
-                ui.checkbox(value=(rid in selected_api), on_change=lambda e, rid=rid: toggle_sel(selected_api, rid))
-                ui.label(f"{rid} - {r.get('test_feature','')}")
-    with ui.row().classes('gap-2 mt-2'):
+    asyncio.create_task(load_and_render_cases())
+
+    # --- Action Buttons and Handlers ---
+    with ui.row().classes('gap-2 mt-2 items-center'):
         date_in = ui.date(value=dt.date.today()).classes('w-40')
         time_in = ui.time(value=dt.datetime.now().strftime('%H:%M')).classes('w-28')
-        ui.label('排程時間 (日期 & 時間)').classes('items-center')
-    async def run_now():
-        show_loading()
-        try:
-            base = os.getenv('BACKEND_URL') or 'http://127.0.0.1:8000'
-            async with httpx.AsyncClient(timeout=60.0) as client:
-                r = await client.post(f'{base}/runs/trigger-pytest')
-                r.raise_for_status()
-                ui.notify('已觸發自動化測試', type='positive')
-        except Exception as e:
-            ui.notify(f'執行失敗: {e}', type='negative')
-        finally:
-            hide_loading()
-    # bind async handler directly; NiceGUI supports async event handlers
-    ui.button('立即執行', icon='play_arrow', on_click=run_now).props('color=primary')
+        ui.label('排程時間')
 
-    # 新增一個 WEB 立即測試按鈕。這個按鈕會將目前專案 ID 和已選取的 Web 案例 ID
-    # 送到後端的 /runs/trigger-web 端點以啟動 Playwright 自動化。執行過程與 API
-    # 測試類似，並會在執行期間透過既有的 WebSocket 日誌串流顯示進度。
     async def run_web_now():
+        await api.log_action(f"User triggered WEB test with cases: {list(selected_web)}")
         show_loading()
         try:
             base = os.getenv('BACKEND_URL') or 'http://127.0.0.1:8000'
-            async with httpx.AsyncClient(timeout=60.0) as client:
-                # 將選取的案例轉換為列表傳遞到後端。如果未選任何案例，後端會預設跑全部。
-                payload = {
-                    'project_id': state.active_project_id,
-                    'case_ids': list(selected_web)
-                }
+            payload = {'project_id': state.active_project_id, 'case_ids': list(selected_web)}
+            async with httpx.AsyncClient(timeout=600.0) as client:
                 r = await client.post(f'{base}/runs/trigger-web', json=payload)
                 r.raise_for_status()
-                ui.notify('已觸發 WEB 測試', type='positive')
+                response_data = r.json()
+                state.last_run_id = response_data.get("run_id")
+                ui.notify('已觸發 WEB 測試，請查看執行紀錄。', type='positive')
+                main_area.refresh() # Refresh to show view log button
         except Exception as e:
             ui.notify(f'WEB 測試失敗: {e}', type='negative')
         finally:
             hide_loading()
-    ui.button('WEB 立即測試', icon='play_circle', on_click=run_web_now).props('color=primary')
 
-    # 新增一個 API 立即測試按鈕。這個按鈕會將目前專案 ID 和已選取的 API 案例 ID
-    # 傳送到後端的 /runs/trigger-api 端點，以啟動對 API 測試案例的自動化執行。
     async def run_api_now():
+        await api.log_action(f"User triggered API test with cases: {list(selected_api)}")
         show_loading()
         try:
             base = os.getenv('BACKEND_URL') or 'http://127.0.0.1:8000'
-            async with httpx.AsyncClient(timeout=60.0) as client:
-                payload = {
-                    'project_id': state.active_project_id,
-                    'case_ids': list(selected_api)
-                }
+            payload = {'project_id': state.active_project_id, 'case_ids': list(selected_api)}
+            async with httpx.AsyncClient(timeout=600.0) as client:
                 r = await client.post(f'{base}/runs/trigger-api', json=payload)
                 r.raise_for_status()
-                ui.notify('已觸發 API 測試', type='positive')
+                response_data = r.json()
+                state.last_run_id = response_data.get("run_id")
+                ui.notify('已觸發 API 測試，請查看執行紀錄。', type='positive')
+                main_area.refresh()
         except Exception as e:
             ui.notify(f'API 測試失敗: {e}', type='negative')
         finally:
             hide_loading()
 
-    ui.button('API 立即測試', icon='play_circle', on_click=run_api_now).props('color=primary')
-    async def schedule_run():
-        # Parse date and time values from the date/time pickers. NiceGUI's
-        # components may return either strings or date/time objects. We
-        # normalize these into `datetime.date` and `datetime.time` before
-        # combining. If parsing fails, notify the user.
-        d_val = date_in.value
-        t_val = time_in.value
-        try:
-            # Convert date value to a date object
-            if isinstance(d_val, dt.date):
-                date_obj = d_val
-            else:
-                date_obj = dt.date.fromisoformat(str(d_val))
-            # Convert time value to a time object
-            if isinstance(t_val, dt.time):
-                time_obj = t_val
-            else:
-                # Some implementations may return strings like 'HH:MM' or 'HH:MM:SS'
-                time_obj = dt.time.fromisoformat(str(t_val))
-            schedule_dt = dt.datetime.combine(date_obj, time_obj)
-        except Exception:
-            ui.notify('排程時間格式錯誤', type='negative')
-            return
-        delay = (schedule_dt - dt.datetime.now()).total_seconds()
-        if delay <= 0:
-            ui.notify('排程時間必須在未來', type='warning')
-            return
-        ui.notify(f'排程已設定，將於 {schedule_dt} 執行', type='info')
-        # record this scheduled job in state so it persists across refreshes
-        scheduled_jobs.append({'time': schedule_dt, 'web': list(selected_web), 'app': list(selected_app), 'api': list(selected_api)})
-        # ensure state stores this list
-        state.scheduled_jobs = scheduled_jobs
-        refresh_schedules()
+    with ui.row().classes('gap-2'):
+        ui.button('WEB 立即測試', icon='play_circle', on_click=run_web_now).props('color=primary')
+        ui.button('API 立即測試', icon='play_circle', on_click=run_api_now).props('color=primary')
 
-        async def later():
-            await asyncio.sleep(delay)
-            await run_now()
-        try:
-            asyncio.create_task(later())
-        except Exception:
-            pass
-    ui.button('設定排程', icon='schedule', on_click=schedule_run).props('color=secondary')
+    # --- Log Area and WebSocket ---
+    with ui.row().classes('w-full items-center justify-between mt-4'):
+        ui.label('執行過程紀錄').classes('text-lg font-semibold')
+        async def view_last_log():
+            if not state.last_run_id:
+                ui.notify("沒有最近的執行紀錄可供查看。", type="warning")
+                return
+            await api.log_action(f"User viewed log for run_id: {state.last_run_id}")
+            show_loading()
+            try:
+                base = os.getenv('BACKEND_URL') or 'http://127.0.0.1:8000'
+                async with httpx.AsyncClient(timeout=30.0) as client:
+                    r = await client.get(f'{base}/logs/{state.last_run_id}')
+                    r.raise_for_status()
+                    log_area.value = r.text
+            except Exception as e:
+                ui.notify(f"讀取日誌失敗: {e}", type="negative")
+            finally:
+                hide_loading()
 
-    # --- 容納自動化執行過程的即時日誌區域 ---
-    # 在頁面最底部新增一個文字區塊，用於顯示後端自動化執行過程的即時輸出。
-    # 此區塊會透過 websocket ``/ws/test-run`` 接收日誌訊息並即時更新。
-    # 建立日誌區域；NiceGUI 的 textarea 不接受 ``readonly`` 參數，需透過 props 設定
-    log_area = ui.textarea(
-        label='執行紀錄',
-        value=''
-    ).props('readonly').classes('w-full h-60 mt-4 bg-gray-50 text-xs font-mono whitespace-pre overflow-y-auto')
+        if state.last_run_id:
+            ui.button('查看上次執行日誌', icon='history', on_click=view_last_log).props('flat')
+
+    log_area = ui.textarea(label='執行紀錄').props('readonly').classes('w-full h-60 mt-2 bg-gray-800 text-white text-xs font-mono whitespace-pre-wrap overflow-y-auto')
 
     async def connect_automation_log():
-        """Connect to the backend WebSocket and stream log lines into the log area.
-
-        Special markers such as ``[webtest] finished`` and ``[apitest] finished``
-        will trigger user notifications so that it's clear when a run completes.
-        """
         try:
             base = os.getenv('BACKEND_URL') or 'http://127.0.0.1:8000'
             ws_url = base.replace('http', 'ws') + '/ws/test-run'
             async with httpx.AsyncClient() as client:
                 async with client.websocket(ws_url) as ws:
+                    log_area.value = "" # Clear log on new connection
                     async for msg in ws:
-                        # Append the message to the log area
                         log_area.value += (msg + '\n')
-                        # Notify on completion markers
-                        if msg.startswith('[webtest] finished'):
-                            ui.notify('WEB 測試已完成', type='positive')
-                        elif msg.startswith('[apitest] finished'):
-                            ui.notify('API 測試已完成', type='positive')
-                        elif msg.startswith('[webtest] error'):
-                            ui.notify(f'WEB 測試錯誤: {msg}', type='negative')
-                        elif msg.startswith('[apitest] error'):
-                            ui.notify(f'API 測試錯誤: {msg}', type='negative')
-                        # update the textarea to reflect new content
-                        log_area.update()
+                        if '[webtest] finished' in msg:
+                            await show_completion_dialog('測試完成', 'WEB 測試已執行完畢。')
+                            await api.log_action("WEB test run finished.")
+                        elif '[apitest] finished' in msg:
+                            await show_completion_dialog('測試完成', 'API 測試已執行完畢。')
+                            await api.log_action("API test run finished.")
+                        elif 'error' in msg.lower():
+                             await api.log_action(f"Test run error reported: {msg}")
         except Exception:
-            # silently ignore websocket errors (e.g. backend not available)
             pass
 
-    # 啟動 websocket listener；若 asyncio 無法啟動則忽略
-    try:
-        asyncio.create_task(connect_automation_log())
-    except Exception:
-        pass
+    asyncio.create_task(connect_automation_log())
 
 
 def render_loadtest(main_area):

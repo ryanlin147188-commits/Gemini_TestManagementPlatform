@@ -22,9 +22,9 @@ from .storage import (
     list_bugs, get_bug, create_bug, update_bug, delete_bug, Bug,
     list_runs, create_run, update_run, delete_run,
     # Project‑scoped cases and bugs
-    list_cases, create_case, update_case, delete_case,
+    list_cases, get_case, create_case, update_case, delete_case,
     get_app_device, set_app_device,
-    list_project_bugs, create_project_bug, update_project_bug, delete_project_bug,
+    list_project_bugs, get_project_bug, create_project_bug, update_project_bug, delete_project_bug,
     # Paths for case types
     WEB_CASES_PATH, APP_CASES_PATH, API_CASES_PATH, APP_DEVICE_PATH,
 )
@@ -63,6 +63,57 @@ app.add_middleware(
     allow_methods=["*"],
     allow_headers=["*"],
 )
+
+# ---- Logging (Requirements #5, #7) ----
+from fastapi import Request
+from datetime import datetime
+
+API_LOG_FILE = os.path.join(DATA_DIR, "api_log.txt")
+USER_ACTION_LOG_FILE = os.path.join(DATA_DIR, "user_action_log.txt")
+
+@app.middleware("http")
+async def log_api_requests(request: Request, call_next):
+    """Middleware to log every API request and its response."""
+    timestamp = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+    log_line = f"{timestamp} - {request.client.host} - \"{request.method} {request.url.path}\""
+
+    response = await call_next(request)
+
+    log_line += f" - {response.status_code}\n"
+
+    with open(API_LOG_FILE, "a", encoding="utf-8") as f:
+        f.write(log_line)
+
+    return response
+
+class UserAction(BaseModel):
+    action: str
+
+@app.post("/log-action")
+async def log_user_action(user_action: UserAction):
+    """Endpoint to log a user action from the frontend."""
+    timestamp = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+    log_line = f"{timestamp} - [USER ACTION] {user_action.action}\n"
+
+    with open(USER_ACTION_LOG_FILE, "a", encoding="utf-8") as f:
+        f.write(log_line)
+
+    return {"ok": True}
+
+@app.get("/logs/{run_id}")
+async def get_log_file(run_id: str):
+    """Retrieve the contents of a specific run's log file."""
+    # Sanitize run_id to prevent directory traversal
+    if not run_id.isalnum() and "_" not in run_id and "-" not in run_id:
+        raise HTTPException(status_code=400, detail="Invalid run_id format")
+
+    log_file_path = os.path.join(LOG_DIR_BASE, run_id, "run.log")
+
+    if not os.path.exists(log_file_path):
+        raise HTTPException(status_code=404, detail="Log file not found")
+
+    with open(log_file_path, "r", encoding="utf-8") as f:
+        return Response(content=f.read(), media_type="text/plain")
 
 # ---------- Pydantic models ----------
 class ProjectIn(BaseModel):
@@ -290,6 +341,13 @@ def api_list_web_cases(
     end = start + page_size
     return {"total": total, "items": cases[start:end]}
 
+@app.get("/projects/{pid}/webcases/names")
+def api_list_web_case_names(pid: int):
+    """Return a lightweight list of web cases (id and name) for a project."""
+    cases = list_cases(WEB_CASES_PATH, pid)
+    # The name is in 'feature' or 'test_feature'
+    return [{"id": c.get("id"), "name": c.get("feature") or c.get("test_feature") or ""} for c in cases]
+
 @app.post("/projects/{pid}/webcases")
 def api_create_web_case(pid: int, payload: WebCaseIn):
     case = create_case(WEB_CASES_PATH, pid, payload.dict(), id_field="id")
@@ -297,9 +355,19 @@ def api_create_web_case(pid: int, payload: WebCaseIn):
 
 @app.put("/projects/{pid}/webcases/{case_id}")
 def api_update_web_case(pid: int, case_id: int, payload: WebCaseIn):
-    case = update_case(WEB_CASES_PATH, pid, case_id, payload.dict(), id_field="id")
-    if not case:
+    # State locking: prevent changes if status is '已審核'
+    current_case = get_case(WEB_CASES_PATH, pid, case_id, id_field="id")
+    if not current_case:
         raise HTTPException(status_code=404, detail="Web case not found")
+
+    # The field in web_cases.json is 'review'
+    is_reviewed = current_case.get("review") == "已審核"
+    payload_dict = payload.dict(exclude_unset=True)
+
+    if is_reviewed and "review" in payload_dict and payload_dict["review"] != "已審核":
+        raise HTTPException(status_code=403, detail="此案例已審核，無法修改狀態。")
+
+    case = update_case(WEB_CASES_PATH, pid, case_id, payload_dict, id_field="id")
     return case
 
 @app.delete("/projects/{pid}/webcases/{case_id}")
@@ -328,6 +396,12 @@ def api_list_app_cases(
     end = start + page_size
     return {"total": total, "items": cases[start:end]}
 
+@app.get("/projects/{pid}/appcases/names")
+def api_list_app_case_names(pid: int):
+    """Return a lightweight list of app cases (id and name) for a project."""
+    cases = list_cases(APP_CASES_PATH, pid)
+    return [{"id": c.get("id"), "name": c.get("feature") or c.get("test_feature") or ""} for c in cases]
+
 @app.post("/projects/{pid}/appcases")
 def api_create_app_case(pid: int, payload: AppCaseIn):
     case = create_case(APP_CASES_PATH, pid, payload.dict(), id_field="id")
@@ -335,9 +409,18 @@ def api_create_app_case(pid: int, payload: AppCaseIn):
 
 @app.put("/projects/{pid}/appcases/{case_id}")
 def api_update_app_case(pid: int, case_id: int, payload: AppCaseIn):
-    case = update_case(APP_CASES_PATH, pid, case_id, payload.dict(), id_field="id")
-    if not case:
+    # State locking: prevent changes if status is '已審核'
+    current_case = get_case(APP_CASES_PATH, pid, case_id, id_field="id")
+    if not current_case:
         raise HTTPException(status_code=404, detail="App case not found")
+
+    is_reviewed = current_case.get("review") == "已審核"
+    payload_dict = payload.dict(exclude_unset=True)
+
+    if is_reviewed and "review" in payload_dict and payload_dict["review"] != "已審核":
+        raise HTTPException(status_code=403, detail="此案例已審核，無法修改狀態。")
+
+    case = update_case(APP_CASES_PATH, pid, case_id, payload_dict, id_field="id")
     return case
 
 @app.delete("/projects/{pid}/appcases/{case_id}")
@@ -366,6 +449,13 @@ def api_list_api_cases(
     end = start + page_size
     return {"total": total, "items": cases[start:end]}
 
+@app.get("/projects/{pid}/apicases/names")
+def api_list_api_case_names(pid: int):
+    """Return a lightweight list of api cases (id and name) for a project."""
+    cases = list_cases(API_CASES_PATH, pid)
+    # API cases use 'step' as their ID field
+    return [{"id": c.get("step"), "name": c.get("feature") or c.get("test_feature") or ""} for c in cases]
+
 @app.post("/projects/{pid}/apicases")
 def api_create_api_case(pid: int, payload: ApiCaseIn):
     case = create_case(API_CASES_PATH, pid, payload.dict(), id_field="step")
@@ -373,9 +463,18 @@ def api_create_api_case(pid: int, payload: ApiCaseIn):
 
 @app.put("/projects/{pid}/apicases/{step}")
 def api_update_api_case(pid: int, step: int, payload: ApiCaseIn):
-    case = update_case(API_CASES_PATH, pid, step, payload.dict(), id_field="step")
-    if not case:
+    # State locking: prevent changes if status is '已審核'
+    current_case = get_case(API_CASES_PATH, pid, step, id_field="step")
+    if not current_case:
         raise HTTPException(status_code=404, detail="API case not found")
+
+    is_reviewed = current_case.get("review") == "已審核"
+    payload_dict = payload.dict(exclude_unset=True)
+
+    if is_reviewed and "review" in payload_dict and payload_dict["review"] != "已審核":
+        raise HTTPException(status_code=403, detail="此案例已審核，無法修改狀態。")
+
+    case = update_case(API_CASES_PATH, pid, step, payload_dict, id_field="step")
     return case
 
 @app.delete("/projects/{pid}/apicases/{step}")
@@ -407,9 +506,18 @@ def api_create_project_bug(pid: int, payload: ProjectBugIn):
 
 @app.put("/projects/{pid}/bugs/{bug_id}")
 def api_update_project_bug(pid: int, bug_id: int, payload: ProjectBugIn):
-    bug = update_project_bug(pid, bug_id, payload.dict())
-    if not bug:
+    # State locking: prevent changes if status is '已審核'
+    current_bug = get_project_bug(pid, bug_id)
+    if not current_bug:
         raise HTTPException(status_code=404, detail="Bug not found")
+
+    is_reviewed = current_bug.get("status") == "已審核"
+    payload_dict = payload.dict(exclude_unset=True)
+
+    if is_reviewed and "status" in payload_dict and payload_dict["status"] != "已審核":
+        raise HTTPException(status_code=403, detail="此BUG已審核，無法修改狀態。")
+
+    bug = update_project_bug(pid, bug_id, payload_dict)
     return bug
 
 @app.delete("/projects/{pid}/bugs/{bug_id}")
