@@ -665,9 +665,8 @@ def api_trigger_web(payload: dict | None = None):
     report_dir = os.path.join(DATA_DIR, "allure-report", ts)
     os.makedirs(result_dir, exist_ok=True)
     os.makedirs(report_dir, exist_ok=True)
-    # create log directory for this run; use a timestamp with underscore and dashes for readability
-    log_ts = time.strftime("%Y%m%d_%H-%M-%S")
-    log_dir = os.path.join(LOG_DIR_BASE, log_ts)
+    # The log directory should use the same 'ts' as the run_id to ensure logs can be found.
+    log_dir = os.path.join(LOG_DIR_BASE, ts)
     os.makedirs(log_dir, exist_ok=True)
     # prepare temporary JSON with selected cases
     tmp_cases_path = os.path.join(DATA_DIR, f"tmp_web_cases_{ts}.json")
@@ -816,9 +815,8 @@ def api_trigger_api(payload: dict | None = None):
     report_dir = os.path.join(DATA_DIR, "allure-report", ts)
     os.makedirs(result_dir, exist_ok=True)
     os.makedirs(report_dir, exist_ok=True)
-    # create log directory for this API run
-    log_ts = time.strftime("%Y%m%d_%H-%M-%S")
-    log_dir = os.path.join(LOG_DIR_BASE, log_ts)
+    # The log directory should use the same 'ts' as the run_id to ensure logs can be found.
+    log_dir = os.path.join(LOG_DIR_BASE, ts)
     os.makedirs(log_dir, exist_ok=True)
     # prepare temporary cases file
     tmp_cases_path = os.path.join(DATA_DIR, f"tmp_api_cases_{ts}.json")
