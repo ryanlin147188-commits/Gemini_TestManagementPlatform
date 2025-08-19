@@ -32,6 +32,34 @@ async def delete_project(project_id: int):
             r.raise_for_status()
         return True
 
+# ---- Case Names ----
+async def list_web_case_names(project_id: int):
+    async with httpx.AsyncClient(timeout=10.0) as client:
+        r = await client.get(f"{base_url()}/projects/{project_id}/webcases/names")
+        r.raise_for_status()
+        return r.json()
+
+async def list_app_case_names(project_id: int):
+    async with httpx.AsyncClient(timeout=10.0) as client:
+        r = await client.get(f"{base_url()}/projects/{project_id}/appcases/names")
+        r.raise_for_status()
+        return r.json()
+
+async def list_api_case_names(project_id: int):
+    async with httpx.AsyncClient(timeout=10.0) as client:
+        r = await client.get(f"{base_url()}/projects/{project_id}/apicases/names")
+        r.raise_for_status()
+        return r.json()
+
+# ---- Logging ----
+async def log_action(action: str):
+    try:
+        async with httpx.AsyncClient(timeout=5.0) as client:
+            await client.post(f"{base_url()}/log-action", json={"action": action})
+    except Exception:
+        # Fail silently if logging fails
+        pass
+
 # ---- Bugs ----
 async def list_bugs(keyword: str = ""):
     params = {"q": keyword} if keyword else None

@@ -85,6 +85,15 @@ def update_case(path: str, project_id: int, case_id: int, case_data: dict, id_fi
             return c
     return None
 
+def get_case(path: str, project_id: int, case_id: int, id_field: str = "id") -> Optional[dict]:
+    """Retrieve a single case by its ID."""
+    data = _load_scoped(path)
+    cases = data.get(str(project_id), [])
+    for case in cases:
+        if str(case.get(id_field)) == str(case_id):
+            return case
+    return None
+
 def delete_case(path: str, project_id: int, case_id: int, id_field: str = "id") -> bool:
     """Delete a case by id. Returns True if removed."""
     data = _load_scoped(path)
@@ -141,6 +150,15 @@ def update_project_bug(project_id: int, bug_id: int, bug_data: dict) -> Optional
             data[str(project_id)] = bugs
             _save_scoped(BUGS_PATH, data)
             return b
+    return None
+
+def get_project_bug(project_id: int, bug_id: int) -> Optional[dict]:
+    """Retrieve a single bug by its ID for a given project."""
+    data = _load_scoped(BUGS_PATH)
+    bugs = data.get(str(project_id), [])
+    for bug in bugs:
+        if str(bug.get('id')) == str(bug_id):
+            return bug
     return None
 
 def delete_project_bug(project_id: int, bug_id: int) -> bool:
