@@ -1,4 +1,5 @@
 from nicegui import ui, app
+
 from fastapi.responses import Response
 @app.get('/favicon.ico', include_in_schema=False)
 def _frontend_favicon():
@@ -9,7 +10,8 @@ import datetime as dt
 import os
 import httpx
 import asyncio
-import api
+impo
+rt api
 
 # === Theme & global styles ===
 
@@ -80,6 +82,7 @@ def setup_theme():
         info='#3B82F6',
     )
     ui.add_css("""
+
 .board-topbar{background:#E6F4FF;border-bottom:1px solid rgba(0,0,0,.06);display:flex;align-items:center;justify-content:space-between;padding:8px 14px;border-radius:10px}
 .board-month{font-weight:700;letter-spacing:.3px}
 .kpi-row{display:grid;grid-template-columns:repeat(6,minmax(140px,1fr));gap:10px}
