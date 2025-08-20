@@ -6,8 +6,9 @@ def base_url() -> str:
     return os.getenv("BACKEND_URL") or "http://127.0.0.1:8000"
 
 # ---- Projects ----
-async def list_projects(keyword: str = ""):
-    params = {"q": keyword} if keyword else None
+async def list_projects(keyword: str = "", owner: str = "", status: str = ""):
+    params = {"q": keyword, "owner": owner, "status": status}
+    params = {k: v for k, v in params.items() if v}
     async with httpx.AsyncClient(timeout=10.0) as client:
         r = await client.get(f"{base_url()}/projects", params=params)
         r.raise_for_status()
@@ -61,29 +62,34 @@ async def log_action(action: str):
         pass
 
 # ---- Cases ----
-async def list_web_cases(project_id: int, keyword: str = ""):
-    params = {"q": keyword} if keyword else {}
+async def list_web_cases(project_id: int, keyword: str = "", action: str = "", result: str = ""):
+    params = {"q": keyword, "action": action, "result": result}
+    # Remove empty values
+    params = {k: v for k, v in params.items() if v}
     async with httpx.AsyncClient(timeout=10.0) as client:
         r = await client.get(f"{base_url()}/projects/{project_id}/webcases", params=params)
         r.raise_for_status()
         return r.json()
 
-async def list_app_cases(project_id: int, keyword: str = ""):
-    params = {"q": keyword} if keyword else {}
+async def list_app_cases(project_id: int, keyword: str = "", action: str = "", result: str = ""):
+    params = {"q": keyword, "action": action, "result": result}
+    params = {k: v for k, v in params.items() if v}
     async with httpx.AsyncClient(timeout=10.0) as client:
         r = await client.get(f"{base_url()}/projects/{project_id}/appcases", params=params)
         r.raise_for_status()
         return r.json()
 
-async def list_api_cases(project_id: int, keyword: str = ""):
-    params = {"q": keyword} if keyword else {}
+async def list_api_cases(project_id: int, keyword: str = "", method: str = "", result: str = ""):
+    params = {"q": keyword, "method": method, "result": result}
+    params = {k: v for k, v in params.items() if v}
     async with httpx.AsyncClient(timeout=10.0) as client:
         r = await client.get(f"{base_url()}/projects/{project_id}/apicases", params=params)
         r.raise_for_status()
         return r.json()
 
-async def list_project_bugs(project_id: int, keyword: str = ""):
-    params = {"q": keyword} if keyword else {}
+async def list_project_bugs(project_id: int, keyword: str = "", severity: str = "", status: str = ""):
+    params = {"q": keyword, "severity": severity, "status": status}
+    params = {k: v for k, v in params.items() if v}
     async with httpx.AsyncClient(timeout=10.0) as client:
         r = await client.get(f"{base_url()}/projects/{project_id}/bugs", params=params)
         r.raise_for_status()

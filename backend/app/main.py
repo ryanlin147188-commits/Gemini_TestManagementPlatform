@@ -204,8 +204,8 @@ def health():
 
 # ---------- Projects CRUD ----------
 @app.get("/projects")
-def api_list_projects(q: Optional[str] = None):
-    return list_projects(q)
+def api_list_projects(q: Optional[str] = None, owner: Optional[str] = None, status: Optional[str] = None):
+    return list_projects(keyword=q, owner=owner, status=status)
 
 @app.get("/projects/{pid}")
 def api_get_project(pid: int):
@@ -495,9 +495,9 @@ def api_set_app_device(pid: int, device: str):
 
 # ---------- Project‑scoped Bugs ----------
 @app.get("/projects/{pid}/bugs")
-def api_list_project_bugs(pid: int, q: Optional[str] = None):
+def api_list_project_bugs(pid: int, q: Optional[str] = None, severity: Optional[str] = None, status: Optional[str] = None):
     """List bugs for a project. Optionally filter by keyword in description, repro, expected or actual."""
-    return list_project_bugs(pid, q)
+    return list_project_bugs(pid, keyword=q, severity=severity, status=status)
 
 @app.post("/projects/{pid}/bugs")
 def api_create_project_bug(pid: int, payload: ProjectBugIn):

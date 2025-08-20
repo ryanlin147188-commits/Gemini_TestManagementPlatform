@@ -118,7 +118,7 @@ def set_app_device(project_id: int, text: str) -> None:
     data[str(project_id)] = [text]
     _save_scoped(APP_DEVICE_PATH, data)
 
-def list_project_bugs(project_id: int, keyword: Optional[str] = None) -> List[dict]:
+def list_project_bugs(project_id: int, keyword: Optional[str] = None, severity: Optional[str] = None, status: Optional[str] = None) -> List[dict]:
     """Return bug list for a specific project (scoped)."""
     # bugs are stored similar to cases: mapping project_id -> list
     data = _load_scoped(BUGS_PATH)
@@ -126,6 +126,12 @@ def list_project_bugs(project_id: int, keyword: Optional[str] = None) -> List[di
     if keyword:
         kw = keyword.lower()
         bugs = [b for b in bugs if kw in b.get('title','').lower() or kw in b.get('repro','').lower() or kw in b.get('expected','').lower() or kw in b.get('actual','').lower()]
+    if severity:
+        sev = severity.lower()
+        bugs = [b for b in bugs if b.get('severity', '').lower() == sev]
+    if status:
+        stat = status.lower()
+        bugs = [b for b in bugs if b.get('status', '').lower() == stat]
     return bugs
 
 def create_project_bug(project_id: int, bug_data: dict) -> dict:
@@ -200,11 +206,17 @@ class Project:
     created_at: str = ""
     updated_at: str = ""
 
-def list_projects(keyword: Optional[str] = None):
+def list_projects(keyword: Optional[str] = None, owner: Optional[str] = None, status: Optional[str] = None):
     items = _load(PROJECTS_PATH)
     if keyword:
         kw = keyword.lower()
-        items = [i for i in items if kw in i.get("name","").lower() or kw in i.get("description","").lower() or kw in i.get("owner","").lower()]
+        items = [i for i in items if kw in i.get("name","").lower() or kw in i.get("description","").lower()]
+    if owner:
+        own = owner.lower()
+        items = [i for i in items if own in i.get("owner","").lower()]
+    if status:
+        stat = status.lower()
+        items = [i for i in items if stat == i.get("status","").lower()]
     return items
 
 def get_project(project_id: int):

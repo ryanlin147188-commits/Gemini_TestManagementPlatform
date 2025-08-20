@@ -460,24 +460,25 @@ def render_projects(main_area):
     # ---- Search bar ----
     with ui.row().classes('gap-2 items-end flex-wrap'):
         name_in = ui.input('專案名稱').props('dense outlined').classes('min-w-[200px]')
-        # The other search inputs are not supported by the backend, so we remove them for now.
-        # owner_in = ui.input('人員').props('dense outlined').classes('min-w-[160px]')
-        # status_in = ui.select(['', '新增', '進行中', '暫停', '完成'], label='專案狀態').props('dense outlined').classes('min-w-[150px]')
+        owner_in = ui.input('人員').props('dense outlined').classes('min-w-[160px]')
+        status_in = ui.select(['', '新增', '進行中', '暫停', '完成'], label='專案狀態').props('dense outlined').classes('min-w-[150px]')
         name_in.value = state.prj_kw
-        # owner_in.value = state.prj_owner
-        # status_in.value = state.prj_status
+        owner_in.value = state.prj_owner
+        status_in.value = state.prj_status
 
         async def do_query():
             show_loading()
             try:
                 state.prj_kw = name_in.value or ''
-                # The backend only supports keyword search, so other filters are not passed.
-                # state.prj_owner = owner_in.value or ''
-                # state.prj_status = status_in.value or ''
+                state.prj_owner = owner_in.value or ''
+                state.prj_status = status_in.value or ''
                 state.prj_page = 1
-                # Fetch data from backend API
-                state.projects = await api.list_projects(keyword=state.prj_kw)
-                await api.log_action(f"Searched projects with keyword: {state.prj_kw}")
+                state.projects = await api.list_projects(
+                    keyword=state.prj_kw,
+                    owner=state.prj_owner,
+                    status=state.prj_status
+                )
+                await api.log_action(f"Searched projects with keyword: {state.prj_kw}, owner: {state.prj_owner}, status: {state.prj_status}")
                 refresh()
                 ui.notify('查詢完成', type='positive')
             except Exception as e:
@@ -490,8 +491,10 @@ def render_projects(main_area):
             try:
                 state.prj_kw = ''
                 name_in.value = ''
-                # state.prj_owner = ''
-                # state.prj_status = ''
+                state.prj_owner = ''
+                owner_in.value = ''
+                state.prj_status = ''
+                status_in.value = ''
                 state.prj_page = 1
                 state.projects = await api.list_projects() # Fetch all
                 refresh()
@@ -540,7 +543,7 @@ def render_projects(main_area):
                     state.active_project_id = 1; state.active_project_name = '未選取'
             await api.log_action(f"Bulk deleted {len(ids)} projects.")
             ui.notify(f'已刪除 {len(ids)} 筆', type='positive')
-            ui.page_proxy.reload()
+            ui.navigate.reload()
         except Exception as e:
             ui.notify(f'刪除失敗: {e}', type='negative')
         finally:
@@ -618,7 +621,7 @@ def render_projects(main_area):
                                 load_scoped_data()
                             await api.log_action(f"Deleted project id={_rid}")
                             ui.notify(f'已刪除專案 {_rid}', type='positive')
-                            ui.page_proxy.reload()
+                            ui.navigate.reload()
                         except Exception as e:
                             ui.notify(f'刪除失敗: {e}', type='negative')
                         finally:
@@ -737,7 +740,7 @@ def render_web_cases(main_area):
                             ui.notify('儲存成功！', type='positive')
                             d.close()
                             # Automatically refresh the page
-                            ui.page_proxy.reload()
+                            ui.navigate.reload()
                         except Exception as e:
                             ui.notify(f"儲存失敗: {e}", type='negative')
                         finally:
@@ -747,17 +750,29 @@ def render_web_cases(main_area):
 
     # Search & actions
     with ui.row().classes('gap-2 items-end flex-wrap'):
-        kw_in = ui.input('關鍵字（功能/敘述/頁面/元件/輸入值）').props('dense outlined').classes('min-w-[260px]')
+        kw_in = ui.input('關鍵字').props('dense outlined').classes('min-w-[200px]')
+        action_sel = ui.select(['前往網址','填入','點擊','等待','檢查','選擇','檔案上傳'], label='動作', multiple=True).props('dense outlined').classes('min-w-[180px]')
+        result_sel = ui.select(['PASS', 'FAIL'], label='結果', multiple=True).props('dense outlined').classes('min-w-[150px]')
+
         kw_in.value = state.web_kw
+        action_sel.value = list(state.web_action)
+        result_sel.value = list(state.web_result)
 
         async def do_query():
             show_loading()
             try:
                 state.web_kw = kw_in.value or ''
+                state.web_action = set(action_sel.value or [])
+                state.web_result = set(result_sel.value or [])
                 state.web_page = 1
-                result = await api.list_web_cases(state.active_project_id, keyword=state.web_kw)
+                result = await api.list_web_cases(
+                    state.active_project_id,
+                    keyword=state.web_kw,
+                    action=",".join(state.web_action),
+                    result=",".join(state.web_result)
+                )
                 state.web_list = result.get('items', [])
-                await api.log_action(f"Searched web cases with keyword: {state.web_kw}")
+                await api.log_action(f"Searched web cases with filters.")
                 refresh()
                 ui.notify('查詢完成', type='positive')
             except Exception as e:
@@ -768,8 +783,9 @@ def render_web_cases(main_area):
         async def do_clear():
             show_loading()
             try:
-                state.web_kw = ''
-                kw_in.value = ''
+                state.web_kw = ''; kw_in.value = ''
+                state.web_action.clear(); action_sel.value = []
+                state.web_result.clear(); result_sel.value = []
                 state.web_page = 1
                 result = await api.list_web_cases(state.active_project_id)
                 state.web_list = result.get('items', [])
@@ -814,7 +830,7 @@ def render_web_cases(main_area):
             save_items(new_items)
             await api.log_action(f"Bulk deleted {len(ids)} web cases.")
             ui.notify(f'已刪除 {len(ids)} 筆', type='positive')
-            ui.page_proxy.reload()
+            ui.navigate.reload()
         except Exception as e:
             ui.notify(f'刪除失敗: {e}', type='negative')
         finally:
@@ -870,7 +886,7 @@ def render_web_cases(main_area):
                             save_items([x for x in items if x.get('id') != case_id])
                             await api.log_action(f"Deleted web case id={case_id}")
                             ui.notify(f'已刪除案例 {case_id}', type='positive')
-                            ui.page_proxy.reload()
+                            ui.navigate.reload()
                         except Exception as e:
                             ui.notify(f'刪除失敗: {e}', type='negative')
                         finally:
@@ -972,7 +988,7 @@ def render_app_cases(main_area):
                             await api.log_action(action_desc)
                             ui.notify('儲存成功！', type='positive')
                             d.close()
-                            ui.page_proxy.reload()
+                            ui.navigate.reload()
                         except Exception as e:
                             ui.notify(f"儲存失敗: {e}", type='negative')
                         finally:
@@ -982,17 +998,29 @@ def render_app_cases(main_area):
 
     # Search & actions
     with ui.row().classes('gap-2 items-end flex-wrap'):
-        kw_in = ui.input('關鍵字（功能/敘述/頁面/元件/輸入值）').props('dense outlined').classes('min-w-[260px]')
+        kw_in = ui.input('關鍵字').props('dense outlined').classes('min-w-[200px]')
+        action_sel = ui.select(['前往網址','填入','點擊','等待','檢查','選擇','檔案上傳'], label='動作', multiple=True).props('dense outlined').classes('min-w-[180px]')
+        result_sel = ui.select(['PASS', 'FAIL'], label='結果', multiple=True).props('dense outlined').classes('min-w-[150px]')
+
         kw_in.value = state.app_kw
+        action_sel.value = list(state.app_action)
+        result_sel.value = list(state.app_result)
 
         async def do_query():
             show_loading()
             try:
                 state.app_kw = kw_in.value or ''
+                state.app_action = set(action_sel.value or [])
+                state.app_result = set(result_sel.value or [])
                 state.app_page = 1
-                result = await api.list_app_cases(state.active_project_id, keyword=state.app_kw)
+                result = await api.list_app_cases(
+                    state.active_project_id,
+                    keyword=state.app_kw,
+                    action=",".join(state.app_action),
+                    result=",".join(state.app_result)
+                )
                 state.app_list = result.get('items', [])
-                await api.log_action(f"Searched app cases with keyword: {state.app_kw}")
+                await api.log_action(f"Searched app cases with filters.")
                 refresh()
                 ui.notify('查詢完成', type='positive')
             except Exception as e:
@@ -1003,8 +1031,9 @@ def render_app_cases(main_area):
         async def do_clear():
             show_loading()
             try:
-                state.app_kw = ''
-                kw_in.value = ''
+                state.app_kw = ''; kw_in.value = ''
+                state.app_action.clear(); action_sel.value = []
+                state.app_result.clear(); result_sel.value = []
                 state.app_page = 1
                 result = await api.list_app_cases(state.active_project_id)
                 state.app_list = result.get('items', [])
@@ -1064,7 +1093,7 @@ def render_app_cases(main_area):
             save_items(new_items)
             await api.log_action(f"Bulk deleted {len(ids)} app cases.")
             ui.notify(f'已刪除 {len(ids)} 筆', type='positive')
-            ui.page_proxy.reload()
+            ui.navigate.reload()
         except Exception as e:
             ui.notify(f'刪除失敗: {e}', type='negative')
         finally:
@@ -1120,7 +1149,7 @@ def render_app_cases(main_area):
                             save_items([x for x in items if x.get('id') != _rid])
                             await api.log_action(f"Deleted app case id={_rid}")
                             ui.notify('已刪除 1 筆', type='positive')
-                            ui.page_proxy.reload()
+                            ui.navigate.reload()
                         except Exception as e:
                             ui.notify(f'刪除失敗: {e}', type='negative')
                         finally:
@@ -1222,7 +1251,7 @@ def render_api_cases(main_area):
                             await api.log_action(action_desc)
                             ui.notify('儲存成功！', type='positive')
                             d.close()
-                            ui.page_proxy.reload()
+                            ui.navigate.reload()
                         except Exception as e:
                             ui.notify(f"儲存失敗: {e}", type='negative')
                         finally:
@@ -1231,17 +1260,29 @@ def render_api_cases(main_area):
         d.open()
 
     with ui.row().classes('gap-2 items-end flex-wrap'):
-        kw_in = ui.input('關鍵字（功能/URL/路徑/Header/Body/預期欄位/預期值）').props('dense outlined').classes('min-w-[320px]')
+        kw_in = ui.input('關鍵字').props('dense outlined').classes('min-w-[200px]')
+        method_sel = ui.select(['POST','GET','PUT','PATCH','DELETE'], label='方法', multiple=True).props('dense outlined').classes('min-w-[180px]')
+        result_sel = ui.select(['PASS', 'FAIL'], label='結果', multiple=True).props('dense outlined').classes('min-w-[150px]')
+
         kw_in.value = state.api_kw
+        method_sel.value = list(state.api_method)
+        result_sel.value = list(state.api_result)
 
         async def do_query():
             show_loading()
             try:
                 state.api_kw = kw_in.value or ''
+                state.api_method = set(method_sel.value or [])
+                state.api_result = set(result_sel.value or [])
                 state.api_page = 1
-                result = await api.list_api_cases(state.active_project_id, keyword=state.api_kw)
+                result = await api.list_api_cases(
+                    state.active_project_id,
+                    keyword=state.api_kw,
+                    method=",".join(state.api_method),
+                    result=",".join(state.api_result)
+                )
                 state.api_list = result.get('items', [])
-                await api.log_action(f"Searched API cases with keyword: {state.api_kw}")
+                await api.log_action(f"Searched API cases with filters.")
                 refresh()
                 ui.notify('查詢完成', type='positive')
             except Exception as e:
@@ -1252,8 +1293,9 @@ def render_api_cases(main_area):
         async def do_clear():
             show_loading()
             try:
-                state.api_kw = ''
-                kw_in.value = ''
+                state.api_kw = ''; kw_in.value = ''
+                state.api_method.clear(); method_sel.value = []
+                state.api_result.clear(); result_sel.value = []
                 state.api_page = 1
                 result = await api.list_api_cases(state.active_project_id)
                 state.api_list = result.get('items', [])
@@ -1294,7 +1336,7 @@ def render_api_cases(main_area):
             save_items([x for x in items if x.get('step') not in ids])
             await api.log_action(f"Bulk deleted {len(ids)} API cases.")
             ui.notify(f'已刪除 {len(ids)} 筆', type='positive')
-            ui.page_proxy.reload()
+            ui.navigate.reload()
         except Exception as e:
             ui.notify(f'刪除失敗: {e}', type='negative')
         finally:
@@ -1353,7 +1395,7 @@ def render_api_cases(main_area):
                             save_items([x for x in items if x.get('step') != _sid])
                             await api.log_action(f"Deleted API case step={_sid}")
                             ui.notify('已刪除 1 筆', type='positive')
-                            ui.page_proxy.reload()
+                            ui.navigate.reload()
                         except Exception as e:
                             ui.notify(f'刪除失敗: {e}', type='negative')
                         finally:
@@ -1455,18 +1497,32 @@ def render_bugs(main_area):
     # Filters
     with ui.row().classes('gap-2 items-end flex-wrap'):
         kw_in = ui.input('關鍵字（問題敘述/重現步驟/預期/實際/備註）').props('dense outlined').classes('min-w-[320px]')
+        sev_sel = ui.select(['','高','中','低'], label='嚴重度').props('dense outlined')
+        st_sel = ui.select(['','新增','進行中','關閉','駁回', '已審核'], label='狀態').props('dense outlined')
         kw_in.value = state.bug_filter_kw
-        # The backend API for bugs only supports a single keyword search.
-        # sev_sel = ui.select(['','高','中','低'], label='嚴重度').props('dense outlined')
-        # st_sel = ui.select(['','新增','進行中','關閉','駁回'], label='狀態').props('dense outlined')
+
+        # Keep track of filter values in a separate state object to avoid conflicts
+        if not hasattr(state, 'bug_sev_filter'):
+            state.bug_sev_filter = ''
+        if not hasattr(state, 'bug_status_filter'):
+            state.bug_status_filter = ''
+        sev_sel.value = state.bug_sev_filter
+        st_sel.value = state.bug_status_filter
 
         async def do_query():
             show_loading()
             try:
                 state.bug_filter_kw = kw_in.value or ''
+                state.bug_sev_filter = sev_sel.value or ''
+                state.bug_status_filter = st_sel.value or ''
                 state.bug_page = 1
-                state.bug_list = await api.list_project_bugs(state.active_project_id, keyword=state.bug_filter_kw)
-                await api.log_action(f"Searched bugs with keyword: {state.bug_filter_kw}")
+                state.bug_list = await api.list_project_bugs(
+                    state.active_project_id,
+                    keyword=state.bug_filter_kw,
+                    severity=state.bug_sev_filter,
+                    status=state.bug_status_filter
+                )
+                await api.log_action(f"Searched bugs with keyword: {state.bug_filter_kw}, severity: {state.bug_sev_filter}, status: {state.bug_status_filter}")
                 refresh()
                 ui.notify('查詢完成', type='positive')
             except Exception as e:
@@ -1479,6 +1535,10 @@ def render_bugs(main_area):
             try:
                 state.bug_filter_kw = ''
                 kw_in.value = ''
+                state.bug_sev_filter = ''
+                sev_sel.value = ''
+                state.bug_status_filter = ''
+                st_sel.value = ''
                 state.bug_page = 1
                 state.bug_list = await api.list_project_bugs(state.active_project_id)
                 refresh()
@@ -1516,7 +1576,7 @@ def render_bugs(main_area):
             save_items([x for x in items if x.get('id') not in ids])
             await api.log_action(f"Bulk deleted {len(ids)} bugs.")
             ui.notify(f'已刪除 {len(ids)} 筆', type='positive')
-            ui.page_proxy.reload()
+            ui.navigate.reload()
         except Exception as e:
             ui.notify(f'刪除失敗: {e}', type='negative')
         finally:
@@ -1573,7 +1633,7 @@ def render_bugs(main_area):
                             save_items([x for x in items if x.get('id') != bug_id])
                             await api.log_action(f"Deleted bug id={bug_id}")
                             ui.notify(f'已刪除 BUG {bug_id}', type='positive')
-                            ui.page_proxy.reload()
+                            ui.navigate.reload()
                         except Exception as e:
                             ui.notify(f'刪除失敗: {e}', type='negative')
                         finally:
@@ -1645,7 +1705,7 @@ def render_bugs(main_area):
                             await api.log_action(action_desc)
                             ui.notify('儲存成功！', type='positive')
                             d.close()
-                            ui.page_proxy.reload()
+                            ui.navigate.reload()
                         except Exception as e:
                             ui.notify(f"儲存失敗: {e}", type='negative')
                         finally:
@@ -2109,36 +2169,8 @@ def render_loadtest(main_area):
     result_filter: set[str] = set()
     selected_steps: set[int] = set()
     def apply_filters():
-        f = []
-        low_kw = kw.lower()
-        for r in all_cases:
-            ok_kw = (not kw) or any(low_kw in str(r.get(k,'')).lower() for k in ['test_feature','url','api_path','body'])
-            ok_method = (not method_filter) or (r.get('method') in method_filter)
-            ok_result = (not result_filter) or (r.get('result') in result_filter)
-            if ok_kw and ok_method and ok_result:
-                f.append(r)
-        return f
-    with ui.row().classes('gap-2 items-end flex-wrap'):
-        kw_in = ui.input('關鍵字（功能/URL/Body）').props('dense outlined').classes('min-w-[260px]')
-        method_sel = ui.select(['','POST','GET','PUT','PATCH','DELETE'], label='方法').props('dense outlined')
-        result_sel = ui.select(['','PASS','FAIL'], label='結果').props('dense outlined')
-        def do_query():
-            nonlocal kw, method_filter, result_filter
-            kw = kw_in.value or ''
-            method_filter = set([method_sel.value]) if method_sel.value else set()
-            result_filter = set([result_sel.value]) if result_sel.value else set()
-            refresh_table()
-        def do_clear():
-            nonlocal kw, method_filter, result_filter
-            kw = ''
-            kw_in.value = ''
-            method_filter.clear()
-            method_sel.value = ''
-            result_filter.clear()
-            result_sel.value = ''
-            refresh_table()
-        ui.button('查詢', icon='search', on_click=do_query).props('color=primary')
-        ui.button('清除搜尋條件', icon='backspace', on_click=do_clear).props('flat')
+        # Filtering UI has been removed as per user request. Return all cases.
+        return all_cases
     table_container = ui.element('div').classes('soft-card p-2 mt-2')
     def refresh_table():
         table_container.clear()
