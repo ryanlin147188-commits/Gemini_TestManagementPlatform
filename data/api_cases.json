@@ -1,19 +1,32 @@
 {
   "1": [
     {
-      "test_feature": "api",
-      "method": "POST",
-      "url": "http://example.com",
-      "api_path": "/api",
-      "header": "{}",
-      "body": "{}",
-      "expected_status": "200",
-      "expected_field": "message",
-      "expected_value": "ok",
-      "result": "PASS",
-      "summary": "sum",
-      "note": "note",
-      "step": 1
+      "step": 1,
+      "feature": "政府",
+      "method": "GET",
+      "url": "https://data.taipei/api/v1/dataset/",
+      "api_path": "9cdbc2ad-39ba-4aca-8f52-8f6312f5523a?scope=resourceAquire",
+      "header": "{\n  'Content-Type': 'application/json',\n  'Cookie': 'FRONT_PHPSESSID=ck4r5td8g8p84g9tpkpou1fq4a'\n}",
+      "body": "{\n  \"resource_id\": \"9cdbc2ad-39ba-4aca-8f52-8f6312f5523a\"\n}",
+      "expect_status": 200,
+      "expect_field": "",
+      "expect_value": "",
+      "response_summary": "",
+      "review": "未審核"
+    },
+    {
+      "step": 2,
+      "feature": "人口",
+      "method": "GET",
+      "url": "https://data.taipei/api/v1/dataset/",
+      "api_path": "120906e8-cebe-475d-bf84-a0b815eec3a2?scope=resourceAquire",
+      "header": "{\n  'Content-Type': 'application/json',\n  'Cookie': 'FRONT_PHPSESSID=ck4r5td8g8p84g9tpkpou1fq4a'\n}",
+      "body": "{\n  \"resource_id\": \"120906e8-cebe-475d-bf84-a0b815eec3a2\"\n}",
+      "expect_status": 200,
+      "expect_field": "",
+      "expect_value": "",
+      "response_summary": "",
+      "review": "未審核"
     }
   ]
 }
