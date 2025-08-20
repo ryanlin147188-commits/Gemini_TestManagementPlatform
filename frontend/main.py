@@ -377,8 +377,13 @@ def bulk_toolbar(selected_ids: set, actions: list[tuple[str, str, callable]]):  
                 for label, icon, handler in actions:
                     ui.button(label, icon=icon, on_click=handler).props('flat')
 def render_projects(main_area):
+    # Ensure 'items' is always initialized from the global state at the beginning.
+    items = state.projects or []
     ui.label(f'目前專案：{state.active_project_name}').classes('text-sm opacity-70')
     ui.separator()
+
+    # Define items at the top to resolve UnboundLocalError in nested functions
+    items = state.projects or []
 
     # 自動刷新：當第一次渲染此頁面時，設定一個定時器週期性讀取 JSON 資料並更新介面。
     # 若 state 上已經存在計時器屬性，則不再重複建立，避免產生多個定時器。
@@ -504,7 +509,7 @@ def render_projects(main_area):
     # ---- Filter + Pagination ----
     # The filtering is now done by the backend API.
     # The 'items' variable is now populated by do_query/do_clear into state.projects
-    items = state.projects or []
+    # and initialized at the top of the function.
 
     page_size = max(1, int(state.prj_page_size or 10))
     total = len(items)
@@ -523,7 +528,7 @@ def render_projects(main_area):
         show_loading()
         try:
             # This is a client-side delete, but for consistency, we'll use the spinner/reload pattern
-            new_items = [x for x in (state.projects or []) if x.get('id') not in ids]
+            new_items = [x for x in items if x.get('id') not in ids]
             write_projects(new_items)
             state.prj_selected_ids.clear()
             state.projects = new_items
@@ -599,7 +604,7 @@ def render_projects(main_area):
                     async def del_one(_rid=rid):
                         show_loading()
                         try:
-                            new_items = [x for x in (state.projects or []) if x.get('id') != _rid]
+                            new_items = [x for x in items if x.get('id') != _rid]
                             write_projects(new_items)
                             state.projects = new_items
                             # 如果刪除的是目前啟用的專案，則自動切換到第一筆或清空
@@ -640,6 +645,7 @@ def render_web_cases(main_area):
     ui.label(f'目前專案：{state.active_project_name}').classes('text-sm opacity-70')
     ui.separator()
 
+    # Define items at the top to resolve UnboundLocalError in nested functions
     items = state.web_list or []
 
     # Dialog for adding/editing WEB test cases
@@ -776,13 +782,13 @@ def render_web_cases(main_area):
         ui.button('新增', icon='add', on_click=lambda: open_dialog()).props('color=accent')
 
     # The filtering is now done by the backend API.
-    filtered = state.web_list or []
+    # We use the 'items' variable consistently, which is defined at the top of the function.
     page_size = 10
-    total = len(filtered)
+    total = len(items)
     max_page = max(1, (total+page_size-1)//page_size)
     state.web_page = min(max(1,state.web_page), max_page)
     start = (state.web_page-1)*page_size
-    page_rows = filtered[start:start+page_size]
+    page_rows = items[start:start+page_size]
 
     def refresh():
         try:
@@ -887,6 +893,7 @@ def render_app_cases(main_area):
     ui.label(f'目前專案：{state.active_project_name}').classes('text-sm opacity-70')
     ui.separator()
 
+    # Define items at the top to resolve UnboundLocalError in nested functions
     items = state.app_list or []
 
     # Dialog for adding/editing APP test cases
@@ -1011,13 +1018,13 @@ def render_app_cases(main_area):
         ui.button('輸入設備資訊', icon='smartphone', on_click=lambda: open_device()).props('flat')
 
     # The filtering is now done by the backend API.
-    filtered = state.app_list or []
+    # We use the 'items' variable consistently, which is defined at the top of the function.
     page_size = 10
-    total = len(filtered)
+    total = len(items)
     max_page = max(1, (total+page_size-1)//page_size)
     state.app_page = min(max(1,state.app_page), max_page)
     start = (state.app_page-1)*page_size
-    page_rows = filtered[start:start+page_size]
+    page_rows = items[start:start+page_size]
 
     def refresh():
         try:
@@ -1135,6 +1142,7 @@ def render_api_cases(main_area):
     ui.label(f'目前專案：{state.active_project_name}').classes('text-sm opacity-70')
     ui.separator()
 
+    # Define items at the top to resolve UnboundLocalError in nested functions
     items = state.api_list or []
 
     # Dialog for adding/editing API test cases
@@ -1258,13 +1266,13 @@ def render_api_cases(main_area):
         ui.button('新增', icon='add', on_click=lambda: open_dialog()).props('color=accent')
 
     # The filtering is now done by the backend API.
-    filtered = state.api_list or []
+    # We use the 'items' variable consistently, which is defined at the top of the function.
     page_size = 10
-    total = len(filtered)
+    total = len(items)
     max_page = max(1, (total+page_size-1)//page_size)
     state.api_page = min(max(1,state.api_page), max_page)
     start = (state.api_page-1)*page_size
-    page_rows = filtered[start:start+page_size]
+    page_rows = items[start:start+page_size]
 
     def refresh():
         try:
@@ -1368,6 +1376,7 @@ def render_bugs(main_area):
     ui.label(f'目前專案：{state.active_project_name}').classes('text-sm opacity-70')
     ui.separator()
 
+    # Define items at the top to resolve UnboundLocalError in nested functions
     items = state.bug_list or []
 
     # Dialog for adding/editing BUG
@@ -1481,13 +1490,13 @@ def render_bugs(main_area):
         ui.button('新增', icon='add', on_click=lambda: open_dialog()).props('color=accent')
 
     # The filtering is now done by the backend API.
-    filtered = state.bug_list or []
+    # We use the 'items' variable consistently, which is defined at the top of the function.
     page_size = 10
-    total = len(filtered)
+    total = len(items)
     max_page = max(1, (total+page_size-1)//page_size)
     state.bug_page = min(max(1,state.bug_page), max_page)
     start = (state.bug_page-1)*page_size
-    page_rows = filtered[start:start+page_size]
+    page_rows = items[start:start+page_size]
 
     def refresh():
         try: main_area.refresh()
