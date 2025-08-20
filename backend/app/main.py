@@ -731,6 +731,23 @@ def api_trigger_web(payload: dict | None = None):
                 lf.write(f"{finish_msg}\n")
                 lf.flush()
                 asyncio.run(_pytest_broadcast(finish_msg))
+
+            # If tests failed (non-zero return code), create a bug ticket
+            if rc != 0:
+                try:
+                    bug_payload = {
+                        "title": f"自動化測試失敗 - WEB - {ts}",
+                        "description": f"自動化測試執行失敗。",
+                        "repro": f"測試報告 ID: {ts}. 請至「報表」頁面查看詳細 Allure 報告。",
+                        "severity": "中",
+                        "status": "新增",
+                        "note": "此BUG由系統自動產生。"
+                    }
+                    create_project_bug(project_id, bug_payload)
+                    asyncio.run(_pytest_broadcast(f"[webtest] 自動建立BUG成功。"))
+                except Exception as e:
+                    asyncio.run(_pytest_broadcast(f"[webtest] 自動建立BUG失敗: {e}"))
+
             # generate the HTML report using the Allure CLI if available
             allure_cmd = shutil.which("allure")
             if allure_cmd:
@@ -874,6 +891,23 @@ def api_trigger_api(payload: dict | None = None):
                 lf.write(f"{finish_msg}\n")
                 lf.flush()
                 asyncio.run(_pytest_broadcast(finish_msg))
+
+            # If tests failed (non-zero return code), create a bug ticket
+            if rc != 0:
+                try:
+                    bug_payload = {
+                        "title": f"自動化測試失敗 - API - {ts}",
+                        "description": f"自動化測試執行失敗。",
+                        "repro": f"測試報告 ID: {ts}. 請至「報表」頁面查看詳細 Allure 報告。",
+                        "severity": "中",
+                        "status": "新增",
+                        "note": "此BUG由系統自動產生。"
+                    }
+                    create_project_bug(project_id, bug_payload)
+                    asyncio.run(_pytest_broadcast(f"[apitest] 自動建立BUG成功。"))
+                except Exception as e:
+                    asyncio.run(_pytest_broadcast(f"[apitest] 自動建立BUG失敗: {e}"))
+
             # generate HTML report using Allure CLI if available
             allure_cmd = shutil.which("allure")
             if allure_cmd:
@@ -996,6 +1030,22 @@ def api_trigger_app(payload: dict | None = None):
                 lf.write(f"{finish_msg}\\n")
                 lf.flush()
                 asyncio.run(_pytest_broadcast(finish_msg))
+
+            # If tests failed (non-zero return code), create a bug ticket
+            if rc != 0:
+                try:
+                    bug_payload = {
+                        "title": f"自動化測試失敗 - APP - {ts}",
+                        "description": f"自動化測試執行失敗。",
+                        "repro": f"測試報告 ID: {ts}. 請至「報表」頁面查看詳細 Allure 報告。",
+                        "severity": "中",
+                        "status": "新增",
+                        "note": "此BUG由系統自動產生。"
+                    }
+                    create_project_bug(project_id, bug_payload)
+                    asyncio.run(_pytest_broadcast(f"[apptest] 自動建立BUG成功。"))
+                except Exception as e:
+                    asyncio.run(_pytest_broadcast(f"[apptest] 自動建立BUG失敗: {e}"))
 
             allure_cmd = shutil.which("allure")
             if allure_cmd:
