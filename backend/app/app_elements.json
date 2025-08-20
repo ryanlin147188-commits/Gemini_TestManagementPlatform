@@ -1,0 +1,14 @@
+{
+  "login_username_field": {
+    "strategy": "accessibility_id",
+    "value": "username"
+  },
+  "login_password_field": {
+    "strategy": "id",
+    "value": "com.example.app:id/password"
+  },
+  "login_button": {
+    "strategy": "xpath",
+    "value": "//android.widget.Button[@text='Log In']"
+  }
+}

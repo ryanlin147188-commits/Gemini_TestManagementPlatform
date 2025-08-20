@@ -1907,9 +1907,50 @@ def render_automation(main_area):
         finally:
             hide_loading()
 
+    async def run_app_now():
+        # App-specific configuration dialog
+        with ui.dialog() as d, ui.card():
+            ui.label('APP 測試設定').classes('text-lg font-semibold')
+            app_file_in = ui.input('APP 檔案名稱 (在 data/ 目錄下)', value='my-app.apk')
+            platform_in = ui.select(['Android', 'iOS'], label='平台名稱', value='Android')
+            version_in = ui.input('平台版本', value='13.0')
+            device_in = ui.input('設備/模擬器名稱', value='Android Emulator')
+
+            async def do_run():
+                d.close()
+                payload = {
+                    'project_id': state.active_project_id,
+                    'case_ids': list(selected_app),
+                    'app_file_name': app_file_in.value,
+                    'platform_name': platform_in.value,
+                    'platform_version': version_in.value,
+                    'device_name': device_in.value,
+                }
+                await api.log_action(f"User triggered APP test with payload: {payload}")
+                show_loading()
+                try:
+                    base = os.getenv('BACKEND_URL') or 'http://127.0.0.1:8000'
+                    async with httpx.AsyncClient(timeout=600.0) as client:
+                        r = await client.post(f'{base}/runs/trigger-app', json=payload)
+                        r.raise_for_status()
+                        response_data = r.json()
+                        state.last_run_id = response_data.get("run_id")
+                        ui.notify('已觸發 APP 測試，請查看執行紀錄。', type='positive')
+                        main_area.refresh()
+                except Exception as e:
+                    ui.notify(f'APP 測試失敗: {e}', type='negative')
+                finally:
+                    hide_loading()
+
+            with ui.row().classes('justify-end gap-2 mt-4'):
+                ui.button('取消', on_click=d.close).props('flat')
+                ui.button('執行測試', on_click=do_run).props('color=primary')
+        await d
+
     with ui.row().classes('gap-2'):
         ui.button('WEB 立即測試', icon='play_circle', on_click=run_web_now).props('color=primary')
         ui.button('API 立即測試', icon='play_circle', on_click=run_api_now).props('color=primary')
+        ui.button('APP 立即測試', icon='play_circle', on_click=run_app_now).props('color=primary')
 
     ui.separator().classes('my-4')
 
