@@ -28,6 +28,7 @@ from .storage import (
     # Paths for case types
     WEB_CASES_PATH, APP_CASES_PATH, API_CASES_PATH, APP_DEVICE_PATH,
 )
+from .mock_storage import get_all_mocks, save_mock
 
 
 # ---- Data directories (default to project-root /data) ----
@@ -492,6 +493,33 @@ def api_get_app_device(pid: int):
 def api_set_app_device(pid: int, device: str):
     set_app_device(pid, device)
     return {"ok": True}
+
+# ---------- Mock API ----------
+class MockRequest(BaseModel):
+    # Request Matching
+    path: str
+    method: str = "GET"
+    params: Optional[List[dict]] = None
+    headers: Optional[List[dict]] = None
+    body: Optional[str] = None
+
+    # Response Definition
+    response_status: int = 200
+    response_headers: Optional[List[dict]] = None
+    response_body: Optional[str] = ""
+    delay_ms: int = 0
+
+@app.get("/api/mocks")
+def api_get_mocks():
+    """Returns the list of all configured mocks."""
+    return get_all_mocks()
+
+@app.post("/api/mock")
+def api_create_mock(payload: MockRequest):
+    """Saves a new mock configuration."""
+    mock_data = payload.dict()
+    return save_mock(mock_data)
+
 
 # ---------- Project‑scoped Bugs ----------
 @app.get("/projects/{pid}/bugs")
@@ -1276,3 +1304,98 @@ def api_locust_report_detail(run_id: str):
             for row in csv.DictReader(f):
                 summary['failures'].append(row)
     return summary
+
+# ---------- Mock API Catch-all Route ----------
+# This must be the last route in the application
+@app.api_route("/{full_path:path}", methods=["GET", "POST", "PUT", "DELETE", "PATCH", "HEAD", "OPTIONS"], include_in_schema=False)
+async def catch_all_mock_route(request: Request, full_path: str):
+    """
+    This route catches all incoming requests and tries to match them against
+    the saved mock configurations.
+    """
+    mocks = get_all_mocks()
+    request_method = request.method
+    request_path = f"/{full_path}"
+    request_query_params = dict(request.query_params)
+    request_headers = dict(request.headers)
+
+    # Try to read body, handle potential errors
+    try:
+        request_body_bytes = await request.body()
+        request_body_str = request_body_bytes.decode('utf-8')
+    except Exception:
+        request_body_str = ""
+
+    for mock in mocks:
+        # --- Start Matching ---
+        match = True
+
+        # 1. Match Method
+        if mock.get('method', 'GET').upper() != request_method.upper():
+            match = False
+            continue
+
+        # 2. Match Path
+        if mock.get('path') != request_path:
+            match = False
+            continue
+
+        # 3. Match Query Params
+        mock_params = {p['key']: p['value'] for p in mock.get('params', []) if p.get('key')}
+        if mock_params:
+            for key, value in mock_params.items():
+                if request_query_params.get(key) != value:
+                    match = False
+                    break
+            if not match:
+                continue
+
+        # 4. Match Headers
+        mock_headers = {h['key'].lower(): h['value'] for h in mock.get('headers', []) if h.get('key')}
+        if mock_headers:
+            for key, value in mock_headers.items():
+                if request_headers.get(key) != value:
+                    match = False
+                    break
+            if not match:
+                continue
+
+        # 5. Match Body
+        mock_body = mock.get('body')
+        if mock_body:
+            # Try to compare JSON objects if both are valid JSON
+            try:
+                mock_body_json = json.loads(mock_body)
+                request_body_json = json.loads(request_body_str)
+                if mock_body_json != request_body_json:
+                    match = False
+            except (json.JSONDecodeError, TypeError):
+                # Fallback to string comparison
+                if mock_body.strip() != request_body_str.strip():
+                    match = False
+
+            if not match:
+                continue
+
+        # --- If we get here, it's a match! ---
+        if match:
+            # Get response details from mock
+            status_code = mock.get('response_status', 200)
+            delay_ms = mock.get('delay_ms', 0)
+            response_body = mock.get('response_body', '')
+            response_headers_list = mock.get('response_headers', [])
+
+            response_headers_dict = {h['key']: h['value'] for h in response_headers_list if h.get('key')}
+
+            # Apply delay
+            if delay_ms > 0:
+                await asyncio.sleep(delay_ms / 1000.0)
+
+            return Response(
+                content=response_body,
+                status_code=status_code,
+                headers=response_headers_dict
+            )
+
+    # If no mock was matched, return a default 404
+    return Response(content=f"No mock found for {request_method} {request_path}", status_code=404)

@@ -27,6 +27,7 @@ MENU_CONFIG = [
     {'path': '/reports',  'label': '報表',     'icon': 'bar_chart'},
     {'path': '/automation','label': '自動化',  'icon': 'bolt'},
     {'path': '/loadtest', 'label': '壓力測試', 'icon': 'speed'},
+    {'path': '/mock', 'label': 'Mock API', 'icon': 'construction'},
 ]
 
 def render_sidebar(active_path: str):
@@ -2355,6 +2356,162 @@ def _page_loadtest():
     except Exception:
         pass
     render_layout('/loadtest', render_loadtest)
+
+
+def render_mock_page(main_area):
+    """
+    Renders the Mock API creation page.
+    """
+    # State for the form
+    if not hasattr(state, 'mock_params'):
+        state.mock_params = [{'key': '', 'value': ''}]
+    if not hasattr(state, 'mock_req_headers'):
+        state.mock_req_headers = [{'key': '', 'value': ''}]
+    if not hasattr(state, 'mock_resp_headers'):
+        state.mock_resp_headers = [{'key': 'Content-Type', 'value': 'application/json'}]
+    if not hasattr(state, 'active_mocks'):
+        state.active_mocks = []
+
+    # UI containers
+    active_mocks_container = ui.column().classes('w-full gap-2')
+
+    def refresh_active_mocks():
+        active_mocks_container.clear()
+        with active_mocks_container:
+            if not state.active_mocks:
+                ui.label('No active mocks.').classes('text-gray-500')
+            else:
+                with ui.grid(columns=4).classes('w-full gap-2'):
+                    for mock in state.active_mocks:
+                        with ui.card().classes('p-2'):
+                            ui.label(f"{mock.get('method', 'GET').upper()} {mock.get('path')}").classes('font-bold')
+                            ui.badge(f"Status: {mock.get('response_status')}", color='positive')
+
+    async def load_initial_mocks():
+        try:
+            state.active_mocks = await api.get_mocks()
+            refresh_active_mocks()
+        except Exception as e:
+            ui.notify(f"Failed to load mocks: {e}", type='negative')
+
+    # Page Header
+    page_header("Mock API Server", "Create and manage mock API endpoints.")
+
+    # Section for active mocks
+    with ui.expansion('Active Mocks', icon='checklist', value=True).classes('w-full soft-card'):
+        with ui.row().classes('w-full items-center justify-between'):
+            ui.label('Currently active mock endpoints. They are matched in the order they are created.')
+            ui.button('Refresh', icon='refresh', on_click=load_initial_mocks).props('flat')
+        refresh_active_mocks()
+
+    # Main card for creating new mocks
+    with ui.card().classes('soft-card w-full mt-4'):
+        ui.label('Create New Mock').classes('text-lg font-bold')
+        ui.separator()
+
+        with ui.grid(columns=2).classes('w-full gap-8 mt-4'):
+            # --- Request Matching Column ---
+            with ui.column().classes('gap-2'):
+                ui.label('Request Matching').classes('text-md font-bold')
+
+                mock_path = ui.input('Endpoint Path', placeholder='/api/users/1').props('outlined dense').classes('w-full')
+                mock_method = ui.select(['GET', 'POST', 'PUT', 'DELETE', 'PATCH'], label='HTTP Method', value='GET').props('outlined dense')
+
+                # Dynamic Key-Value for Query Params
+                ui.label('Query Parameters').classes('mt-2')
+                params_container = ui.column().classes('w-full gap-1')
+                def render_params():
+                    params_container.clear()
+                    with params_container:
+                        for i, param in enumerate(state.mock_params):
+                            with ui.row().classes('w-full items-center gap-2'):
+                                ui.input(placeholder='Key', value=param['key'], on_change=lambda e, i=i: state.mock_params[i].update({'key': e.value})).props('dense outlined').classes('grow')
+                                ui.input(placeholder='Value', value=param['value'], on_change=lambda e, i=i: state.mock_params[i].update({'value': e.value})).props('dense outlined').classes('grow')
+                                ui.button(icon='remove', on_click=lambda _, i=i: (state.mock_params.pop(i), render_params())).props('flat dense color=negative')
+                        ui.button('Add Param', icon='add', on_click=lambda: (state.mock_params.append({'key':'', 'value':''}), render_params())).props('flat dense').classes('mt-1')
+                render_params()
+
+                # Dynamic Key-Value for Request Headers
+                ui.label('Request Headers').classes('mt-2')
+                req_headers_container = ui.column().classes('w-full gap-1')
+                def render_req_headers():
+                    req_headers_container.clear()
+                    with req_headers_container:
+                        for i, header in enumerate(state.mock_req_headers):
+                            with ui.row().classes('w-full items-center gap-2'):
+                                ui.input(placeholder='Key', value=header['key'], on_change=lambda e, i=i: state.mock_req_headers[i].update({'key': e.value})).props('dense outlined').classes('grow')
+                                ui.input(placeholder='Value', value=header['value'], on_change=lambda e, i=i: state.mock_req_headers[i].update({'value': e.value})).props('dense outlined').classes('grow')
+                                ui.button(icon='remove', on_click=lambda _, i=i: (state.mock_req_headers.pop(i), render_req_headers())).props('flat dense color=negative')
+                        ui.button('Add Header', icon='add', on_click=lambda: (state.mock_req_headers.append({'key':'', 'value':''}), render_req_headers())).props('flat dense').classes('mt-1')
+                render_req_headers()
+
+                mock_req_body = ui.textarea('Request Body (JSON or Text)').props('outlined').classes('w-full mt-2')
+
+            # --- Response Definition Column ---
+            with ui.column().classes('gap-2'):
+                ui.label('Response Definition').classes('text-md font-bold')
+
+                mock_resp_status = ui.number('Status Code', value=200, min=100, max=599).props('outlined dense')
+                mock_delay = ui.number('Delay (ms)', value=0, min=0).props('outlined dense')
+
+                # Dynamic Key-Value for Response Headers
+                ui.label('Response Headers').classes('mt-2')
+                resp_headers_container = ui.column().classes('w-full gap-1')
+                def render_resp_headers():
+                    resp_headers_container.clear()
+                    with resp_headers_container:
+                        for i, header in enumerate(state.mock_resp_headers):
+                            with ui.row().classes('w-full items-center gap-2'):
+                                ui.input(placeholder='Key', value=header['key'], on_change=lambda e, i=i: state.mock_resp_headers[i].update({'key': e.value})).props('dense outlined').classes('grow')
+                                ui.input(placeholder='Value', value=header['value'], on_change=lambda e, i=i: state.mock_resp_headers[i].update({'value': e.value})).props('dense outlined').classes('grow')
+                                ui.button(icon='remove', on_click=lambda _, i=i: (state.mock_resp_headers.pop(i), render_resp_headers())).props('flat dense color=negative')
+                        ui.button('Add Header', icon='add', on_click=lambda: (state.mock_resp_headers.append({'key':'', 'value':''}), render_resp_headers())).props('flat dense').classes('mt-1')
+                render_resp_headers()
+
+                mock_resp_body = ui.textarea('Response Body (JSON, XML, Text)').props('outlined').classes('w-full mt-2')
+
+        ui.separator().classes('my-4')
+
+        async def do_create_mock():
+            if not mock_path.value or not mock_path.value.startswith('/'):
+                ui.notify('Endpoint Path must start with /', type='negative')
+                return
+
+            payload = {
+                "path": mock_path.value,
+                "method": mock_method.value,
+                "params": [p for p in state.mock_params if p['key']],
+                "headers": [h for h in state.mock_req_headers if h['key']],
+                "body": mock_req_body.value or None,
+                "response_status": int(mock_resp_status.value),
+                "response_headers": [h for h in state.mock_resp_headers if h['key']],
+                "response_body": mock_resp_body.value or "",
+                "delay_ms": int(mock_delay.value)
+            }
+
+            show_loading()
+            try:
+                await api.create_mock(payload)
+                ui.notify('Mock created successfully!', type='positive')
+                await load_initial_mocks() # Refresh the list
+            except Exception as e:
+                ui.notify(f"Failed to create mock: {e}", type='negative')
+            finally:
+                hide_loading()
+
+        ui.button('Create Mock', icon='add_circle', on_click=do_create_mock).props('color=primary')
+
+    # Load mocks when page opens
+    asyncio.create_task(load_initial_mocks())
+
+
+@ui.page('/mock')
+def _page_mock():
+    try:
+        setup_theme()
+    except Exception:
+        pass
+    render_layout('/mock', render_mock_page)
 
 # == 測試案例頁面路由 ==
 @ui.page('/webcases')
