@@ -460,25 +460,15 @@ def render_projects(main_area):
     # ---- Search bar ----
     with ui.row().classes('gap-2 items-end flex-wrap'):
         name_in = ui.input('專案名稱').props('dense outlined').classes('min-w-[200px]')
-        owner_in = ui.input('人員').props('dense outlined').classes('min-w-[160px]')
-        status_in = ui.select(['', '新增', '進行中', '暫停', '完成'], label='專案狀態').props('dense outlined').classes('min-w-[150px]')
         name_in.value = state.prj_kw
-        owner_in.value = state.prj_owner
-        status_in.value = state.prj_status
 
         async def do_query():
             show_loading()
             try:
                 state.prj_kw = name_in.value or ''
-                state.prj_owner = owner_in.value or ''
-                state.prj_status = status_in.value or ''
                 state.prj_page = 1
-                state.projects = await api.list_projects(
-                    keyword=state.prj_kw,
-                    owner=state.prj_owner,
-                    status=state.prj_status
-                )
-                await api.log_action(f"Searched projects with keyword: {state.prj_kw}, owner: {state.prj_owner}, status: {state.prj_status}")
+                state.projects = await api.list_projects(keyword=state.prj_kw)
+                await api.log_action(f"Searched projects with keyword: {state.prj_kw}")
                 refresh()
                 ui.notify('查詢完成', type='positive')
             except Exception as e:
@@ -491,10 +481,6 @@ def render_projects(main_area):
             try:
                 state.prj_kw = ''
                 name_in.value = ''
-                state.prj_owner = ''
-                owner_in.value = ''
-                state.prj_status = ''
-                status_in.value = ''
                 state.prj_page = 1
                 state.projects = await api.list_projects() # Fetch all
                 refresh()
@@ -592,13 +578,22 @@ def render_projects(main_area):
                 # 操作列：切換 / 編輯 / 刪除
                 with ui.row().classes('w-32 gap-1'):
                     # 切換按鈕：切換為目前使用的專案
-                    def _switch_proj(_rid=rid, _name=r.get('name','')):
-                        state.active_project_id = _rid
-                        state.active_project_name = _name or f'專案 {_rid}'
-                        # 重新載入各項資料
-                        load_scoped_data()
-                        refresh()
-                        ui.notify(f'已切換至專案【{state.active_project_name}】', type='info')
+                    async def _switch_proj(_rid=rid, _name=r.get('name','')):
+                        show_loading()
+                        try:
+                            state.active_project_id = _rid
+                            state.active_project_name = _name or f'專案 {_rid}'
+                            # 重新載入各項資料
+                            load_scoped_data()
+                            await api.log_action(f"Switched to project id={_rid}")
+                            ui.notify(f'已切換至專案【{state.active_project_name}】', type='info')
+                            # A full reload is better to ensure all components reset
+                            ui.navigate.reload()
+                        except Exception as e:
+                            ui.notify(f'切換專案失敗: {e}', type='negative')
+                        finally:
+                            # Hide loading might not be seen due to reload, but good practice
+                            hide_loading()
                     # 使用代表切換的 icon
                     ui.button(icon='swap_horiz', on_click=_switch_proj).props('flat')
                     # 編輯按鈕
@@ -750,29 +745,17 @@ def render_web_cases(main_area):
 
     # Search & actions
     with ui.row().classes('gap-2 items-end flex-wrap'):
-        kw_in = ui.input('關鍵字').props('dense outlined').classes('min-w-[200px]')
-        action_sel = ui.select(['前往網址','填入','點擊','等待','檢查','選擇','檔案上傳'], label='動作', multiple=True).props('dense outlined').classes('min-w-[180px]')
-        result_sel = ui.select(['PASS', 'FAIL'], label='結果', multiple=True).props('dense outlined').classes('min-w-[150px]')
-
+        kw_in = ui.input('關鍵字').props('dense outlined').classes('min-w-[260px]')
         kw_in.value = state.web_kw
-        action_sel.value = list(state.web_action)
-        result_sel.value = list(state.web_result)
 
         async def do_query():
             show_loading()
             try:
                 state.web_kw = kw_in.value or ''
-                state.web_action = set(action_sel.value or [])
-                state.web_result = set(result_sel.value or [])
                 state.web_page = 1
-                result = await api.list_web_cases(
-                    state.active_project_id,
-                    keyword=state.web_kw,
-                    action=",".join(state.web_action),
-                    result=",".join(state.web_result)
-                )
+                result = await api.list_web_cases(state.active_project_id, keyword=state.web_kw)
                 state.web_list = result.get('items', [])
-                await api.log_action(f"Searched web cases with filters.")
+                await api.log_action(f"Searched web cases with keyword: {state.web_kw}")
                 refresh()
                 ui.notify('查詢完成', type='positive')
             except Exception as e:
@@ -783,9 +766,8 @@ def render_web_cases(main_area):
         async def do_clear():
             show_loading()
             try:
-                state.web_kw = ''; kw_in.value = ''
-                state.web_action.clear(); action_sel.value = []
-                state.web_result.clear(); result_sel.value = []
+                state.web_kw = ''
+                kw_in.value = ''
                 state.web_page = 1
                 result = await api.list_web_cases(state.active_project_id)
                 state.web_list = result.get('items', [])
@@ -869,13 +851,20 @@ def render_web_cases(main_area):
                 ui.label(r.get('value','')).classes('w-32')
                 # 審核狀態下拉選單，預設未審核/已審核
                 is_reviewed = r.get('review') == '已審核'
-                s = ui.select(['未審核','已審核'], value=r.get('review','未審核'),
-                          on_change=lambda e, record=r: (
-                              record.update({'review': e.value}),
-                              write_scoped_list(WEB_CASES_FILE, state.active_project_id, state.web_list),
-                              setattr(state, 'web_list', state.web_list),
-                              ui.notify('已更新審核狀態', type='positive')
-                          )).props('dense').classes('w-24')
+                async def on_status_change(e, record=r):
+                    show_loading()
+                    try:
+                        record.update({'review': e.value})
+                        write_scoped_list(WEB_CASES_FILE, state.active_project_id, state.web_list)
+                        setattr(state, 'web_list', state.web_list)
+                        await api.log_action(f"Updated web case id={record.get('id')} status to {e.value}")
+                        ui.notify('已更新審核狀態', type='positive')
+                        ui.navigate.reload()
+                    except Exception as ex:
+                        ui.notify(f'更新失敗: {ex}', type='negative')
+                    finally:
+                        hide_loading()
+                s = ui.select(['未審核','已審核'], value=r.get('review','未審核'), on_change=on_status_change).props('dense').classes('w-24')
                 if is_reviewed:
                     s.props('readonly disable')
                 with ui.row().classes('w-28 gap-1'):
@@ -998,29 +987,17 @@ def render_app_cases(main_area):
 
     # Search & actions
     with ui.row().classes('gap-2 items-end flex-wrap'):
-        kw_in = ui.input('關鍵字').props('dense outlined').classes('min-w-[200px]')
-        action_sel = ui.select(['前往網址','填入','點擊','等待','檢查','選擇','檔案上傳'], label='動作', multiple=True).props('dense outlined').classes('min-w-[180px]')
-        result_sel = ui.select(['PASS', 'FAIL'], label='結果', multiple=True).props('dense outlined').classes('min-w-[150px]')
-
+        kw_in = ui.input('關鍵字').props('dense outlined').classes('min-w-[260px]')
         kw_in.value = state.app_kw
-        action_sel.value = list(state.app_action)
-        result_sel.value = list(state.app_result)
 
         async def do_query():
             show_loading()
             try:
                 state.app_kw = kw_in.value or ''
-                state.app_action = set(action_sel.value or [])
-                state.app_result = set(result_sel.value or [])
                 state.app_page = 1
-                result = await api.list_app_cases(
-                    state.active_project_id,
-                    keyword=state.app_kw,
-                    action=",".join(state.app_action),
-                    result=",".join(state.app_result)
-                )
+                result = await api.list_app_cases(state.active_project_id, keyword=state.app_kw)
                 state.app_list = result.get('items', [])
-                await api.log_action(f"Searched app cases with filters.")
+                await api.log_action(f"Searched app cases with keyword: {state.app_kw}")
                 refresh()
                 ui.notify('查詢完成', type='positive')
             except Exception as e:
@@ -1031,9 +1008,8 @@ def render_app_cases(main_area):
         async def do_clear():
             show_loading()
             try:
-                state.app_kw = ''; kw_in.value = ''
-                state.app_action.clear(); action_sel.value = []
-                state.app_result.clear(); result_sel.value = []
+                state.app_kw = ''
+                kw_in.value = ''
                 state.app_page = 1
                 result = await api.list_app_cases(state.active_project_id)
                 state.app_list = result.get('items', [])
@@ -1075,9 +1051,18 @@ def render_app_cases(main_area):
                 ta.value = current or ''
                 with ui.row().classes('justify-end gap-2 mt-3'):
                     ui.button('取消', on_click=d.close).props('flat')
-                    def save_dev():
-                        write_scoped_list(APP_DEVICE_FILE, state.active_project_id, [ta.value or ''])
-                        d.close(); ui.notify('已儲存設備資訊', type='positive')
+                    async def save_dev():
+                        show_loading()
+                        try:
+                            write_scoped_list(APP_DEVICE_FILE, state.active_project_id, [ta.value or ''])
+                            await api.log_action(f"Saved device info for project {state.active_project_id}")
+                            d.close()
+                            ui.notify('已儲存設備資訊', type='positive')
+                            ui.navigate.reload()
+                        except Exception as e:
+                            ui.notify(f'儲存失敗: {e}', type='negative')
+                        finally:
+                            hide_loading()
                     ui.button('儲存', on_click=save_dev, color='primary')
         d.open()
 
@@ -1132,13 +1117,20 @@ def render_app_cases(main_area):
                 ui.label(r.get('value','')).classes('w-32')
                 # 審核狀態下拉選單
                 is_reviewed = r.get('review') == '已審核'
-                s = ui.select(['未審核','已審核'], value=r.get('review','未審核'),
-                          on_change=lambda e, record=r: (
-                              record.update({'review': e.value}),
-                              write_scoped_list(APP_CASES_FILE, state.active_project_id, state.app_list),
-                              setattr(state, 'app_list', state.app_list),
-                              ui.notify('已更新審核狀態', type='positive')
-                          )).props('dense').classes('w-24')
+                async def on_status_change(e, record=r):
+                    show_loading()
+                    try:
+                        record.update({'review': e.value})
+                        write_scoped_list(APP_CASES_FILE, state.active_project_id, state.app_list)
+                        setattr(state, 'app_list', state.app_list)
+                        await api.log_action(f"Updated app case id={record.get('id')} status to {e.value}")
+                        ui.notify('已更新審核狀態', type='positive')
+                        ui.navigate.reload()
+                    except Exception as ex:
+                        ui.notify(f'更新失敗: {ex}', type='negative')
+                    finally:
+                        hide_loading()
+                s = ui.select(['未審核','已審核'], value=r.get('review','未審核'), on_change=on_status_change).props('dense').classes('w-24')
                 if is_reviewed:
                     s.props('readonly disable')
                 with ui.row().classes('w-28 gap-1'):
@@ -1260,29 +1252,17 @@ def render_api_cases(main_area):
         d.open()
 
     with ui.row().classes('gap-2 items-end flex-wrap'):
-        kw_in = ui.input('關鍵字').props('dense outlined').classes('min-w-[200px]')
-        method_sel = ui.select(['POST','GET','PUT','PATCH','DELETE'], label='方法', multiple=True).props('dense outlined').classes('min-w-[180px]')
-        result_sel = ui.select(['PASS', 'FAIL'], label='結果', multiple=True).props('dense outlined').classes('min-w-[150px]')
-
+        kw_in = ui.input('關鍵字').props('dense outlined').classes('min-w-[320px]')
         kw_in.value = state.api_kw
-        method_sel.value = list(state.api_method)
-        result_sel.value = list(state.api_result)
 
         async def do_query():
             show_loading()
             try:
                 state.api_kw = kw_in.value or ''
-                state.api_method = set(method_sel.value or [])
-                state.api_result = set(result_sel.value or [])
                 state.api_page = 1
-                result = await api.list_api_cases(
-                    state.active_project_id,
-                    keyword=state.api_kw,
-                    method=",".join(state.api_method),
-                    result=",".join(state.api_result)
-                )
+                result = await api.list_api_cases(state.active_project_id, keyword=state.api_kw)
                 state.api_list = result.get('items', [])
-                await api.log_action(f"Searched API cases with filters.")
+                await api.log_action(f"Searched API cases with keyword: {state.api_kw}")
                 refresh()
                 ui.notify('查詢完成', type='positive')
             except Exception as e:
@@ -1293,9 +1273,8 @@ def render_api_cases(main_area):
         async def do_clear():
             show_loading()
             try:
-                state.api_kw = ''; kw_in.value = ''
-                state.api_method.clear(); method_sel.value = []
-                state.api_result.clear(); result_sel.value = []
+                state.api_kw = ''
+                kw_in.value = ''
                 state.api_page = 1
                 result = await api.list_api_cases(state.active_project_id)
                 state.api_list = result.get('items', [])
@@ -1378,13 +1357,20 @@ def render_api_cases(main_area):
                 ui.label(r.get('response_summary','')).classes('w-32')
                 # 審核狀態下拉選單，未審核/已審核
                 is_reviewed = r.get('review') == '已審核'
-                s = ui.select(['未審核','已審核'], value=r.get('review','未審核'),
-                          on_change=lambda e, record=r: (
-                              record.update({'review': e.value}),
-                              write_scoped_list(API_CASES_FILE, state.active_project_id, state.api_list),
-                              setattr(state, 'api_list', state.api_list),
-                              ui.notify('已更新審核狀態', type='positive')
-                          )).props('dense').classes('w-24')
+                async def on_status_change(e, record=r):
+                    show_loading()
+                    try:
+                        record.update({'review': e.value})
+                        write_scoped_list(API_CASES_FILE, state.active_project_id, state.api_list)
+                        setattr(state, 'api_list', state.api_list)
+                        await api.log_action(f"Updated API case step={record.get('step')} status to {e.value}")
+                        ui.notify('已更新審核狀態', type='positive')
+                        ui.navigate.reload()
+                    except Exception as ex:
+                        ui.notify(f'更新失敗: {ex}', type='negative')
+                    finally:
+                        hide_loading()
+                s = ui.select(['未審核','已審核'], value=r.get('review','未審核'), on_change=on_status_change).props('dense').classes('w-24')
                 if is_reviewed:
                     s.props('readonly disable')
                 with ui.row().classes('w-28 gap-1'):
@@ -1497,32 +1483,15 @@ def render_bugs(main_area):
     # Filters
     with ui.row().classes('gap-2 items-end flex-wrap'):
         kw_in = ui.input('關鍵字（問題敘述/重現步驟/預期/實際/備註）').props('dense outlined').classes('min-w-[320px]')
-        sev_sel = ui.select(['','高','中','低'], label='嚴重度').props('dense outlined')
-        st_sel = ui.select(['','新增','進行中','關閉','駁回', '已審核'], label='狀態').props('dense outlined')
         kw_in.value = state.bug_filter_kw
-
-        # Keep track of filter values in a separate state object to avoid conflicts
-        if not hasattr(state, 'bug_sev_filter'):
-            state.bug_sev_filter = ''
-        if not hasattr(state, 'bug_status_filter'):
-            state.bug_status_filter = ''
-        sev_sel.value = state.bug_sev_filter
-        st_sel.value = state.bug_status_filter
 
         async def do_query():
             show_loading()
             try:
                 state.bug_filter_kw = kw_in.value or ''
-                state.bug_sev_filter = sev_sel.value or ''
-                state.bug_status_filter = st_sel.value or ''
                 state.bug_page = 1
-                state.bug_list = await api.list_project_bugs(
-                    state.active_project_id,
-                    keyword=state.bug_filter_kw,
-                    severity=state.bug_sev_filter,
-                    status=state.bug_status_filter
-                )
-                await api.log_action(f"Searched bugs with keyword: {state.bug_filter_kw}, severity: {state.bug_sev_filter}, status: {state.bug_status_filter}")
+                state.bug_list = await api.list_project_bugs(state.active_project_id, keyword=state.bug_filter_kw)
+                await api.log_action(f"Searched bugs with keyword: {state.bug_filter_kw}")
                 refresh()
                 ui.notify('查詢完成', type='positive')
             except Exception as e:
@@ -1535,10 +1504,6 @@ def render_bugs(main_area):
             try:
                 state.bug_filter_kw = ''
                 kw_in.value = ''
-                state.bug_sev_filter = ''
-                sev_sel.value = ''
-                state.bug_status_filter = ''
-                st_sel.value = ''
                 state.bug_page = 1
                 state.bug_list = await api.list_project_bugs(state.active_project_id)
                 refresh()
@@ -1608,13 +1573,20 @@ def render_bugs(main_area):
                 # 狀態欄改為下拉選單，可即時更新
                 is_reviewed = r.get('status') == '已審核'
                 options = ['新增','進行中','關閉','駁回', '已審核']
-                s = ui.select(options, value=r.get('status','新增'),
-                          on_change=lambda e, record=r: (
-                              record.update({'status': e.value}),
-                              write_scoped_list(BUGS_FILE, state.active_project_id, state.bug_list),
-                              setattr(state, 'bug_list', state.bug_list),
-                              ui.notify('已更新狀態', type='positive')
-                          )).props('dense').classes('w-24')
+                async def on_status_change(e, record=r):
+                    show_loading()
+                    try:
+                        record.update({'status': e.value})
+                        write_scoped_list(BUGS_FILE, state.active_project_id, state.bug_list)
+                        setattr(state, 'bug_list', state.bug_list)
+                        await api.log_action(f"Updated bug id={record.get('id')} status to {e.value}")
+                        ui.notify('已更新狀態', type='positive')
+                        ui.navigate.reload()
+                    except Exception as ex:
+                        ui.notify(f'更新失敗: {ex}', type='negative')
+                    finally:
+                        hide_loading()
+                s = ui.select(options, value=r.get('status','新增'), on_change=on_status_change).props('dense').classes('w-24')
                 if is_reviewed:
                     s.props('readonly disable')
                 ui.label(r.get('repro','')).classes('w-[20%]')
@@ -1786,37 +1758,29 @@ def render_reports(main_area):
                             ui.label(name).classes('grow')
                             # 審核狀態下拉選單
                             is_reviewed = state.report_reviews.get(path) == '已審核'
+                            async def on_status_change(e, p=path):
+                                show_loading()
+                                try:
+                                    state.report_reviews.__setitem__(p, e.value)
+                                    # Note: report status is not saved to a file, it's in-memory state.
+                                    await api.log_action(f"Updated report {p} status to {e.value}")
+                                    ui.notify('已更新報表審核狀態', type='positive')
+                                    ui.navigate.reload()
+                                except Exception as ex:
+                                    ui.notify(f'更新失敗: {ex}', type='negative')
+                                finally:
+                                    hide_loading()
                             s = ui.select(['未審核','已審核'], value=state.report_reviews.get(path,'未審核'),
-                                      on_change=lambda e, p=path: (
-                                          state.report_reviews.__setitem__(p, e.value),
-                                          ui.notify('已更新報表審核狀態', type='positive')
-                                      )).props('dense').classes('w-24')
+                                      on_change=on_status_change).props('dense').classes('w-24')
                             if is_reviewed:
                                 s.props('readonly disable')
-                            def _open(p=path, n=name):
-                                """Open an Allure report in a fixed 1920×1080 dialog.
+                            def _open(p=path):
+                                """Open an Allure report in a new window with a specific size."""
+                                base_url = os.getenv('BACKEND_URL') or 'http://127.0.0.1:8000'
+                                full_url = f'{base_url}{p}'
+                                js_command = f"window.open('{full_url}', '_blank', 'width=1920,height=1080');"
+                                ui.run_javascript(js_command)
 
-                                The original implementation used `w-screen h-screen` to fill the
-                                browser viewport, which on some systems resulted in a smaller
-                                popup. To provide a consistent large preview, this dialog now
-                                explicitly sets its card to 1920px by 1080px and sizes the
-                                contained iframe accordingly. Adjust these values if your
-                                display resolution differs.
-                                """
-                                with ui.dialog() as d:
-                                    # Apply explicit dimensions via style to create a large dialog.
-                                    with ui.card().classes('p-0').style('width: 1920px; height: 1080px;'):
-                                        # Title bar for the report
-                                        ui.label(f'報告: {n}').classes('text-lg p-2')
-                                        base2 = os.getenv('BACKEND_URL') or 'http://127.0.0.1:8000'
-                                        # The iframe occupies the remainder of the card. Subtract a bit of
-                                        # height for the label (approx 40px). You can tweak this if needed.
-                                        ui.html(
-                                            f'<iframe src="{base2}{p}" style="width: 100%; height: calc(100% - 40px); border: none;"></iframe>'
-                                        ).classes('w-full h-full')
-                                # Set Quasar dialog prop for full‑screen mode for better mobile support
-                                d.props('full-screen')
-                                d.open()
                             ui.button('查看', on_click=_open).props('flat color=primary')
         except Exception as e:
             reports_list.clear()
@@ -2023,8 +1987,6 @@ def render_automation(main_area):
 
         async def run_now_scheduled():
             # This is the generic run function for scheduled tasks.
-            # It can be customized to run a specific suite or all tests.
-            # For now, it mirrors the original generic pytest trigger.
             show_loading()
             try:
                 await api.log_action("Triggered a scheduled test run.")
@@ -2056,6 +2018,8 @@ def render_automation(main_area):
                 return
 
             ui.notify(f'排程已設定，將於 {schedule_dt} 執行', type='info')
+            if not hasattr(state, 'scheduled_jobs'):
+                state.scheduled_jobs = []
             state.scheduled_jobs.append({
                 'time': schedule_dt,
                 'web': list(selected_web),
@@ -2072,21 +2036,26 @@ def render_automation(main_area):
 
         ui.button('設定排程', icon='schedule', on_click=schedule_run).props('color=secondary')
 
-    # --- Scheduled Jobs List ---
+    # --- Scheduled Jobs List (Display Only) ---
     ui.label('已排程工作').classes('text-lg font-semibold mt-4')
     schedule_list = ui.column().classes('mt-2 gap-1')
 
     def refresh_schedules():
         schedule_list.clear()
-        if not state.scheduled_jobs:
+        # The state object `state.scheduled_jobs` might not be initialized if the
+        # feature was removed, so we check for its existence.
+        if not hasattr(state, 'scheduled_jobs') or not state.scheduled_jobs:
             with schedule_list:
-                ui.label('尚無排程').classes('muted')
+                # Per user feedback, do not show "No schedules" message.
+                # The label above is sufficient.
+                pass
             return
+
         # Sort jobs by time before displaying
         sorted_jobs = sorted(state.scheduled_jobs, key=lambda j: j['time'])
         state.scheduled_jobs = sorted_jobs
 
-        for idx, job in enumerate(sorted_jobs):
+        for job in sorted_jobs:
             dt_str = job['time'].strftime('%Y-%m-%d %H:%M')
             with schedule_list:
                 with ui.row().classes('items-center gap-2 p-1 rounded-md hover:bg-gray-100 w-full'):
@@ -2104,7 +2073,8 @@ def render_automation(main_area):
                     ui.button(icon='delete', on_click=_del_schedule).props('flat dense color=negative')
 
     # Initial render of the schedule list
-    refresh_schedules()
+    if hasattr(state, 'scheduled_jobs'):
+        refresh_schedules()
 
     # --- Log Area and WebSocket ---
     with ui.row().classes('w-full items-center justify-between mt-4'):
