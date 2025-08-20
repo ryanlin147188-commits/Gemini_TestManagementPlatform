@@ -531,10 +531,8 @@ ALLURE_REPORT_DIR  = os.getenv("ALLURE_REPORT_DIR",  os.path.join(DATA_DIR, "all
 os.makedirs(ALLURE_RESULTS_DIR, exist_ok=True)
 os.makedirs(ALLURE_REPORT_DIR, exist_ok=True)
 
-try:
-    app.mount("/allure/report", StaticFiles(directory=ALLURE_REPORT_DIR, html=True), name="allure-report")
-except Exception:
-    pass
+# Mount the Allure report directory. Removing the try-except block to ensure any startup errors are visible.
+app.mount("/allure/report", StaticFiles(directory=ALLURE_REPORT_DIR, html=True), name="allure-report")
 
 @app.get("/allure/results")
 def api_allure_results():
