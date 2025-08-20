@@ -1,0 +1,25 @@
+version: '3.8'
+
+services:
+  backend:
+    build: ./backend
+    ports:
+      - "8000:8000"
+    volumes:
+      - ./data:/app/data
+    environment:
+      - DATA_DIR=/app/data
+
+  frontend:
+    build: ./frontend
+    ports:
+      - "8081:8081"
+    depends_on:
+      - backend
+    environment:
+      - BACKEND_URL=http://backend:8000
+      # This will be used to tell the app to run on 0.0.0.0
+      - DOCKER_ENV=1
+
+volumes:
+  data:
