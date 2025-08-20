@@ -10,8 +10,7 @@ import datetime as dt
 import os
 import httpx
 import asyncio
-impo
-rt api
+import api
 
 # === Theme & global styles ===
 
@@ -168,58 +167,16 @@ def section(title: str, tip: str | None = None):
     ui.separator()
 from dataclasses import dataclass, field, asdict
 from typing import List, Dict, Callable, Optional
-import json, os
+# import json, os # No longer needed for file i/o
+# from pathlib import Path # No longer needed for file i/o
+
+# UPLOADS_DIR is still needed for the upload component
 from pathlib import Path
-
-ROOT = Path(__file__).resolve().parent.parent  # project root
+ROOT = Path(__file__).resolve().parent.parent
 DATA_DIR = ROOT / 'data'
-DATA_DIR.mkdir(exist_ok=True)
-TESTCASES_FILE = DATA_DIR / 'test_cases.json'
-BUGS_FILE = DATA_DIR / 'bugs.json'
-
-WEB_CASES_FILE = DATA_DIR / 'web_cases.json'
-APP_CASES_FILE = DATA_DIR / 'app_cases.json'
-API_CASES_FILE = DATA_DIR / 'api_cases.json'
-APP_DEVICE_FILE = DATA_DIR / 'app_device.json'
 UPLOADS_DIR = DATA_DIR / 'uploads'
 UPLOADS_DIR.mkdir(exist_ok=True)
 app.add_static_files('/uploads', str(UPLOADS_DIR))
-PROJECTS_FILE = DATA_DIR / 'projects.json'
-
-# --------- 工具函式：JSON 持久化 ---------
-def read_json(path: Path, fallback):
-    try:
-        return json.loads(path.read_text(encoding='utf-8'))
-    except Exception:
-        return fallback
-
-def write_json(path: Path, data):
-    path.write_text(json.dumps(data, ensure_ascii=False, indent=2), encoding='utf-8')
-
-
-
-# ---- Projects helpers ----
-def read_projects() -> list:
-    data = read_json(PROJECTS_FILE, [])
-    return data if isinstance(data, list) else []
-
-def write_projects(items: list):
-    write_json(PROJECTS_FILE, items)
-
-# ---- 專案範圍的清單讀寫：以 {"<project_id>": [...]} 結構儲存 ----
-def read_scoped_list(path: Path, project_id: int):
-    data = read_json(path, {})
-    if isinstance(data, list):
-        # 舊版結構：升級為字典，將舊資料歸到 "1"
-        data = {"1": data}
-    return data.get(str(project_id), [])
-
-def write_scoped_list(path: Path, project_id: int, items: list):
-    data = read_json(path, {})
-    if isinstance(data, list):
-        data = {"1": data}
-    data[str(project_id)] = items
-    write_json(path, data)
 
 # --------- 資料模型 ---------
 @dataclass
@@ -304,30 +261,28 @@ class AppState:
     prj_selected_ids: set = field(default_factory=set)
 
 state = AppState(active_view='dashboard')
-# ---- 專案上下文 ----
-def load_projects():
-    items = read_json(PROJECTS_FILE, [])
-    if not isinstance(items, list):
-        items = []
-    state.projects = items
-    if items:
-        first = items[0]
-        state.active_project_id = int(first.get('id', 1))
-        state.active_project_name = first.get('name', f'專案 {state.active_project_id}')
-    else:
+# ---- 專案上下文 (Data is now loaded via API calls in each page) ----
+# Initial load for active project is still needed to avoid errors,
+# but it will be overwritten by async calls.
+async def load_initial_project():
+    try:
+        projects = await api.list_projects()
+        state.projects = projects
+        if projects:
+            first = projects[0]
+            state.active_project_id = int(first.get('id', 1))
+            state.active_project_name = first.get('name', f'專案 {state.active_project_id}')
+        else:
+            state.active_project_id = 1
+            state.active_project_name = '未選取'
+    except Exception:
+        # Fallback if backend is not available on startup
         state.active_project_id = 1
         state.active_project_name = '未選取'
+        state.projects = []
 
-def load_scoped_data():
-    state.web_list = read_scoped_list(WEB_CASES_FILE, state.active_project_id)
-    state.app_list = read_scoped_list(APP_CASES_FILE, state.active_project_id)
-    state.api_list = read_scoped_list(API_CASES_FILE, state.active_project_id)
-    state.tc_list = state.web_list
-    state.bug_list = read_scoped_list(BUGS_FILE, state.active_project_id)
-
-
-load_projects()
-load_scoped_data()
+# This runs once when the app starts
+asyncio.create_task(load_initial_project())
 
 # --------- 共用 UI 元件 ---------
 def confirm(title: str, text: str, on_ok: Callable[[], None]):
@@ -381,49 +336,126 @@ def bulk_toolbar(selected_ids: set, actions: list[tuple[str, str, callable]]):  
             with ui.row().classes('gap-2'):
                 for label, icon, handler in actions:
                     ui.button(label, icon=icon, on_click=handler).props('flat')
-def render_projects(main_area):
-    # Ensure 'items' is always initialized from the global state at the beginning.
-    items = state.projects or []
+async def render_projects(main_area):
     ui.label(f'目前專案：{state.active_project_name}').classes('text-sm opacity-70')
     ui.separator()
 
-    # Define items at the top to resolve UnboundLocalError in nested functions
-    items = state.projects or []
+    # Container for the table and pagination
+    table_container = ui.column().classes('w-full')
 
-    # 自動刷新：當第一次渲染此頁面時，設定一個定時器週期性讀取 JSON 資料並更新介面。
-    # 若 state 上已經存在計時器屬性，則不再重複建立，避免產生多個定時器。
-    if not hasattr(state, '_projects_timer'):
-        def _auto_refresh() -> None:
-            """定時重新讀取專案資料並刷新介面。"""
-            try:
-                fresh = read_projects()
-                if isinstance(fresh, list):
-                    # 僅在資料有變動時更新，以避免不必要的 UI 渲染
-                    state.projects = fresh
-                # 刷新主區域
-                try:
-                    main_area.refresh()
-                except Exception:
-                    pass
-            except Exception:
-                # 讀取失敗時忽略
-                pass
-        # 每 10 秒刷新一次
-        state._projects_timer = ui.timer(10.0, _auto_refresh)
+    async def refresh_projects():
+        show_loading()
+        table_container.clear()
+        try:
+            items = await api.list_projects(keyword=state.prj_kw, owner=state.prj_owner, status=state.prj_status)
+            state.projects = items # Update global state
+            with table_container:
+                render_table(items)
+        except Exception as e:
+            with table_container:
+                ui.label(f'Error loading projects: {e}').classes('text-negative')
+        finally:
+            hide_loading()
 
-    # Local helpers
-    def refresh():
-        try: main_area.refresh()
-        except Exception: pass
+    def render_table(items):
+        page_size = max(1, int(state.prj_page_size or 10))
+        total = len(items)
+        max_page = max(1, (total + page_size - 1) // page_size)
+        state.prj_page = min(max(1, state.prj_page), max_page)
+        start = (state.prj_page - 1) * page_size
+        page_rows = items[start:start+page_size]
 
-    # CRUD Dialog (Create/Edit)
+        bulk_toolbar(state.prj_selected_ids, [
+            ('刪除選取', 'delete', bulk_delete),
+            ('清除選取', 'close', lambda: (state.prj_selected_ids.clear(), asyncio.create_task(refresh_projects()))),
+        ])
+
+        if not page_rows and total == 0:
+            empty_state('尚無專案', '點擊右上角「新增」建立第一個專案。', '新增', on_click=lambda: open_project_dialog())
+            return
+
+        with ui.element('div').classes('soft-card p-2'):
+            # Table Header
+            with ui.row().classes('text-sm muted items-center py-1'):
+                ui.checkbox(on_change=lambda e: (state.prj_selected_ids.update(r.get('id') for r in page_rows) if e.value else state.prj_selected_ids.clear()) or table_container.refresh())
+                ui.label('編號').classes('w-20')
+                ui.label('專案名稱').classes('w-[40%]')
+                ui.label('人員').classes('w-40')
+                ui.label('專案狀態').classes('w-28')
+                ui.label('操作').classes('w-32')
+            ui.separator().classes('opacity-20')
+
+            # Table Rows
+            for r in page_rows:
+                render_row(r)
+
+        # Pagination
+        with ui.row().classes('items-center justify-between pt-2'):
+            ui.label(f'第 {state.prj_page}/{max_page} 頁 · 每頁 {page_size} 筆 · 共 {total} 筆').classes('muted')
+            with ui.row().classes('gap-2'):
+                async def prev_page():
+                    if state.prj_page > 1:
+                        state.prj_page -= 1
+                        await refresh_projects()
+                async def next_page():
+                    if state.prj_page < max_page:
+                        state.prj_page += 1
+                        await refresh_projects()
+                ui.button('上一頁', icon='chevron_left', on_click=prev_page).props('flat')
+                ui.button('下一頁', icon='chevron_right', on_click=next_page).props('flat')
+
+    def render_row(r):
+        rid = r.get('id')
+        with ui.row().classes('items-center py-1'):
+            ui.checkbox(value=(rid in state.prj_selected_ids), on_change=lambda e, rid=rid: (state.prj_selected_ids.remove(rid) if rid in state.prj_selected_ids else state.prj_selected_ids.add(rid)) or table_container.refresh())
+            ui.label(str(rid)).classes('w-20')
+            ui.label(r.get('name','')).classes('w-[40%]')
+            ui.label(r.get('owner','')).classes('w-40')
+            with ui.element('div').classes('w-28'):
+                status_badge(r.get('status','新增'), {'新增':'info','進行中':'primary','暫停':'warning','完成':'positive'})
+            with ui.row().classes('w-32 gap-1'):
+                async def switch_proj(_rid=rid):
+                    state.active_project_id = _rid
+                    await load_initial_project() # Reload project info
+                    ui.navigate.reload()
+                ui.button(icon='swap_horiz', on_click=switch_proj).props('flat')
+                ui.button(icon='edit', on_click=lambda rid=rid: open_project_dialog(rid)).props('flat')
+                async def del_one(_rid=rid):
+                    show_loading()
+                    try:
+                        await api.delete_project(_rid)
+                        await api.log_action(f"Deleted project id={_rid}")
+                        ui.notify(f'已刪除專案 {_rid}', type='positive')
+                        await refresh_projects()
+                    except Exception as e:
+                        ui.notify(f'刪除失敗: {e}', type='negative')
+                    finally:
+                        hide_loading()
+                ui.button(icon='delete', on_click=del_one).props('flat')
+
+    async def bulk_delete():
+        ids_to_delete = list(state.prj_selected_ids)
+        if not ids_to_delete: return
+        show_loading()
+        try:
+            for pid in ids_to_delete:
+                await api.delete_project(pid)
+            await api.log_action(f"Bulk deleted {len(ids_to_delete)} projects.")
+            ui.notify(f'已刪除 {len(ids_to_delete)} 筆', type='positive')
+            state.prj_selected_ids.clear()
+            await refresh_projects()
+        except Exception as e:
+            ui.notify(f'刪除失敗: {e}', type='negative')
+        finally:
+            hide_loading()
+
     def open_project_dialog(edit_id: int | None = None):
         editing = None
-        if edit_id is not None:
-            for p in read_projects():
-                if str(p.get('id')) == str(edit_id):
-                    editing = p; break
-
+        if edit_id:
+            for p in state.projects:
+                if p.get('id') == edit_id:
+                    editing = p
+                    break
         with ui.dialog() as d:
             with ui.card().classes('p-4 min-w-[420px]'):
                 ui.label('新增專案' if not editing else '修改專案').classes('text-lg font-semibold')
@@ -434,31 +466,23 @@ def render_projects(main_area):
                     name.value = editing.get('name','')
                     owner.value = editing.get('owner','')
                     status.value = editing.get('status','新增')
-
                 with ui.row().classes('justify-end gap-2 mt-3'):
                     ui.button('取消', on_click=d.close).props('flat')
-                    def save():
-                        nm = (name.value or '').strip()
-                        ow = (owner.value or '').strip()
-                        st = status.value or '新增'
-                        if not nm:
-                            ui.notify('請輸入專案名稱', type='warning'); return
-                        data = read_projects()
-                        if editing:
-                            for i, p in enumerate(data):
-                                if str(p.get('id')) == str(editing.get('id')):
-                                    data[i] = {**p, 'name': nm, 'owner': ow, 'status': st}
-                                    break
-                        else:
-                            new_id = max([int(p.get('id', 0)) for p in data] + [0]) + 1
-                            data.append({'id': new_id, 'name': nm, 'owner': ow, 'status': st})
-                            if state.active_project_name == '未選取':
-                                state.active_project_id = new_id
-                                state.active_project_name = nm
-                        write_projects(data)
-                        # reload projects for selector
-                        state.projects = data
-                        d.close(); refresh(); ui.notify('已儲存', type='positive')
+                    async def save():
+                        payload = {'name': name.value, 'owner': owner.value, 'status': status.value}
+                        show_loading()
+                        try:
+                            if editing:
+                                await api.update_project(editing['id'], payload)
+                            else:
+                                await api.create_project(payload)
+                            d.close()
+                            await refresh_projects()
+                            ui.notify('已儲存', type='positive')
+                        except Exception as e:
+                            ui.notify(f'儲存失敗: {e}', type='negative')
+                        finally:
+                            hide_loading()
                     ui.button('儲存', color='primary', on_click=save)
         d.open()
 
@@ -644,285 +668,131 @@ def render_projects(main_area):
     if not state.projects:
         asyncio.create_task(do_clear())
 
-def render_web_cases(main_area):
+async def render_web_cases(main_area):
     ui.label(f'目前專案：{state.active_project_name}').classes('text-sm opacity-70')
     ui.separator()
 
-    # Define items at the top to resolve UnboundLocalError in nested functions
-    items = state.web_list or []
+    table_container = ui.column().classes('w-full')
 
-    # Dialog for adding/editing WEB test cases
-    # NOTE: we expose this dialog as ``open_dialog`` so the lambda callbacks
-    # defined later in this function can reference it. In previous revisions
-    # the function was named ``open_dialog_bug_unused`` which caused a
-    # NameError when referenced. Renaming to ``open_dialog`` keeps the
-    # functionality identical but makes the name available to the outer scope.
-    def open_dialog(edit_id: int | None = None):
-        """打開新增/編輯 WEB 案例的對話框，會顯示不可編輯的編號欄位。"""
-        editing = None
-        if edit_id is not None:
-            # 尋找現有項目
-            for p in state.web_list or []:
-                if str(p.get('id')) == str(edit_id):
-                    editing = p
-                    break
-        # 預先計算下一個編號供顯示
-        current_list = state.web_list or []
-        next_id = max([int(p.get('id', 0)) for p in current_list] + [0]) + 1
-        with ui.dialog() as d:
-            with ui.card().classes('p-4 min-w-[560px]'):
-                ui.label('新增測試案例' if not editing else '修改測試案例').classes('text-lg font-semibold')
-                cols = ui.grid(columns=2).classes('gap-2 mt-2')
-                with cols:
-                    # 編號欄位只供顯示，無法編輯
-                    id_input = ui.input('編號(自動帶入)').props('outlined dense disabled')
-                    # 其餘輸入欄位
-                    feature = ui.input('測試功能').props('outlined dense')
-                    step = ui.input('測試步驟').props('outlined dense')
-                    action = ui.select(['前往網址','填入','點擊','等待','檢查','選擇','檔案上傳'], label='動作').props('outlined dense')
-                    desc = ui.input('敘述').props('outlined dense')
-                    page_ = ui.input('頁面').props('outlined dense')
-                    elem = ui.input('元件').props('outlined dense')
-                    val = ui.input('輸入值').props('outlined dense')
-                    # 移除測試結果與備註欄位，僅保留必要欄位
-                # 若為編輯模式，填入現有值；否則顯示新 ID
-                if editing:
-                    id_input.value = str(editing.get('id', ''))
-                    feature.value = editing.get('feature', '')
-                    step.value = editing.get('step', '')
-                    action.value = editing.get('action', '')
-                    desc.value = editing.get('desc', '')
-                    page_.value = editing.get('page', '')
-                    elem.value = editing.get('element', '')
-                    val.value = editing.get('value', '')
-                    # no result/note fields to set
-                else:
-                    id_input.value = str(next_id)
-                with ui.row().classes('justify-end gap-2 mt-3'):
-                    ui.button('取消', on_click=d.close).props('flat')
-                    async def save():
-                        show_loading()
-                        try:
-                            action_desc = "created new web case"
-                            if editing:
-                                action_desc = f"updated web case id={editing.get('id')}"
-
-                            data = state.web_list or []
-                            if editing:
-                                # 更新現有資料
-                                for i, p in enumerate(data):
-                                    if str(p.get('id')) == str(editing.get('id')):
-                                        data[i] = {**p,
-                                                   'feature': feature.value or '',
-                                                   'step': step.value or '',
-                                                   'action': action.value or '',
-                                                   'desc': desc.value or '',
-                                                   'page': page_.value or '',
-                                                   'element': elem.value or '',
-                                                   'value': val.value or ''}
-                                        break
-                            else:
-                                # 新增
-                                new_id = next_id
-                                data.append({
-                                    'id': new_id,
-                                    'feature': feature.value or '',
-                                    'step': step.value or '',
-                                    'action': action.value or '',
-                                    'desc': desc.value or '',
-                                    'page': page_.value or '',
-                                    'element': elem.value or '',
-                                    'value': val.value or '',
-                                    'review': '未審核'
-                                })
-                            save_items(data)
-                            await api.log_action(action_desc)
-                            ui.notify('儲存成功！', type='positive')
-                            d.close()
-                            # Automatically refresh the page
-                            ui.navigate.reload()
-                        except Exception as e:
-                            ui.notify(f"儲存失敗: {e}", type='negative')
-                        finally:
-                            hide_loading()
-                    ui.button('儲存', color='primary', on_click=save)
-        d.open()
-
-    # Search & actions
-    with ui.row().classes('gap-2 items-end flex-wrap'):
-        kw_in = ui.input('關鍵字').props('dense outlined').classes('min-w-[260px]')
-        kw_in.value = state.web_kw
-
-        async def do_query():
-            show_loading()
-            try:
-                state.web_kw = kw_in.value or ''
-                state.web_page = 1
-                result = await api.list_web_cases(state.active_project_id, keyword=state.web_kw)
-                state.web_list = result.get('items', [])
-                await api.log_action(f"Searched web cases with keyword: {state.web_kw}")
-                refresh()
-                ui.notify('查詢完成', type='positive')
-            except Exception as e:
-                ui.notify(f'查詢失敗: {e}', type='negative')
-            finally:
-                hide_loading()
-
-        async def do_clear():
-            show_loading()
-            try:
-                state.web_kw = ''
-                kw_in.value = ''
-                state.web_page = 1
-                result = await api.list_web_cases(state.active_project_id)
-                state.web_list = result.get('items', [])
-                refresh()
-            finally:
-                hide_loading()
-
-        ui.button('查詢', icon='search', on_click=do_query).props('color=primary')
-        ui.button('清除搜尋條件', icon='backspace', on_click=do_clear).props('flat')
-        ui.button('新增', icon='add', on_click=lambda: open_dialog()).props('color=accent')
-
-    # The filtering is now done by the backend API.
-    # We use the 'items' variable consistently, which is defined at the top of the function.
-    page_size = 10
-    total = len(items)
-    max_page = max(1, (total+page_size-1)//page_size)
-    state.web_page = min(max(1,state.web_page), max_page)
-    start = (state.web_page-1)*page_size
-    page_rows = items[start:start+page_size]
-
-    def refresh():
-        try:
-            main_area.refresh()
-        except Exception:
-            pass
-
-    def save_items(new_items):
-        write_scoped_list(WEB_CASES_FILE, state.active_project_id, new_items)
-        state.web_list = new_items
-        state.tc_list = new_items  # keep legacy
-        refresh()
-
-    # Bulk toolbar
-    def clear_sel():
-        state.web_selected_ids.clear(); refresh()
-    async def bulk_delete():
-        ids = set(state.web_selected_ids)
-        if not ids: return
+    async def refresh_cases():
         show_loading()
+        table_container.clear()
         try:
-            new_items = [x for x in items if x.get('id') not in ids]
-            save_items(new_items)
-            await api.log_action(f"Bulk deleted {len(ids)} web cases.")
-            ui.notify(f'已刪除 {len(ids)} 筆', type='positive')
-            ui.navigate.reload()
+            result = await api.list_web_cases(
+                state.active_project_id,
+                keyword=state.web_kw,
+                action=",".join(state.web_action),
+                result=",".join(state.web_result)
+            )
+            state.web_list = result.get('items', [])
+            with table_container:
+                render_table(state.web_list, result.get('total', 0))
         except Exception as e:
-            ui.notify(f'刪除失敗: {e}', type='negative')
+            with table_container:
+                ui.label(f'Error loading web cases: {e}').classes('text-negative')
         finally:
             hide_loading()
-    bulk_toolbar(state.web_selected_ids, [('刪除選取','delete', bulk_delete), ('清除選取','close', clear_sel)])
 
-    # Empty state
-    if not page_rows and total==0:
-        empty_state('尚無 WEB 測試案例', '點擊右上角「新增」建立第一筆。', '新增', on_click=lambda: open_dialog())
-        return
+    def render_table(items, total):
+        # Pagination
+        page_size = 50
+        max_page = max(1, (total + page_size - 1) // page_size)
+        state.web_page = min(max(1, state.web_page), max_page)
 
-    # Table
-    with ui.element('div').classes('soft-card p-2'):
-        with ui.row().classes('text-sm muted items-center py-1'):
-            ui.checkbox(on_change=lambda e: (state.web_selected_ids.update(r.get('id') for r in page_rows) if e.value else state.web_selected_ids.clear()) or refresh())
-            # remove 測試結果 and 備註 columns, add 審核狀態
-            for h, w in [('編號','w-16'), ('測試功能','w-32'), ('測試步驟','w-20'), ('動作','w-28'),
-                         ('敘述','w-[20%]'), ('頁面','w-28'), ('元件','w-28'), ('輸入值','w-32'), ('審核','w-24'), ('操作','w-28')]:
-                ui.label(h).classes(w)
-        ui.separator().classes('opacity-20')
+        # Bulk Actions
+        bulk_toolbar(state.web_selected_ids, [
+            ('刪除選取', 'delete', bulk_delete),
+            ('清除選取', 'close', lambda: (state.web_selected_ids.clear(), table_container.refresh()))
+        ])
 
-        for r in page_rows:
-            rid = r.get('id')
-            with ui.row().classes('items-center py-1'):
-                def toggle_row(v=None, _rid=rid):
-                    if _rid in state.web_selected_ids: state.web_selected_ids.remove(_rid)
-                    else: state.web_selected_ids.add(_rid); refresh()
-                ui.checkbox(value=(rid in state.web_selected_ids), on_change=lambda e, rid=rid: toggle_row(e.value, rid))
-                ui.label(str(r.get('id'))).classes('w-16')
-                ui.label(r.get('feature','')).classes('w-32')
-                ui.label(r.get('step','')).classes('w-20')
-                ui.label(r.get('action','')).classes('w-28')
-                ui.label(r.get('desc','')).classes('w-[20%]')
-                ui.label(r.get('page','')).classes('w-28')
-                ui.label(r.get('element','')).classes('w-28')
-                ui.label(r.get('value','')).classes('w-32')
-                # 審核狀態下拉選單，預設未審核/已審核
-                is_reviewed = r.get('review') == '已審核'
-                async def on_status_change(e, record=r):
-                    show_loading()
-                    try:
-                        record.update({'review': e.value})
-                        write_scoped_list(WEB_CASES_FILE, state.active_project_id, state.web_list)
-                        setattr(state, 'web_list', state.web_list)
-                        await api.log_action(f"Updated web case id={record.get('id')} status to {e.value}")
-                        ui.notify('已更新審核狀態', type='positive')
-                        ui.navigate.reload()
-                    except Exception as ex:
-                        ui.notify(f'更新失敗: {ex}', type='negative')
-                    finally:
-                        hide_loading()
-                s = ui.select(['未審核','已審核'], value=r.get('review','未審核'), on_change=on_status_change).props('dense').classes('w-24')
-                if is_reviewed:
-                    s.props('readonly disable')
-                with ui.row().classes('w-28 gap-1'):
-                    ui.button(icon='edit', on_click=lambda rid=rid: open_dialog(rid)).props('flat')
-                    async def del_one(case_id=rid):
-                        show_loading()
-                        try:
-                            save_items([x for x in items if x.get('id') != case_id])
-                            await api.log_action(f"Deleted web case id={case_id}")
-                            ui.notify(f'已刪除案例 {case_id}', type='positive')
-                            ui.navigate.reload()
-                        except Exception as e:
-                            ui.notify(f'刪除失敗: {e}', type='negative')
-                        finally:
-                            hide_loading()
-                    ui.button(icon='delete', on_click=del_one).props('flat')
+        if not items and total == 0:
+            empty_state('尚無 WEB 測試案例', '點擊右上角「新增」建立第一筆。', '新增', on_click=lambda: open_dialog())
+            return
 
+        with ui.element('div').classes('soft-card p-2'):
+            # Table Header
+            with ui.row().classes('text-sm muted items-center py-1'):
+                ui.checkbox(on_change=lambda e: (state.web_selected_ids.update(r.get('id') for r in items) if e.value else state.web_selected_ids.clear()) or table_container.refresh())
+                for h, w in [('編號','w-16'), ('測試功能','w-32'), ('測試步驟','w-20'), ('動作','w-28'),
+                             ('敘述','w-[20%]'), ('頁面','w-28'), ('元件','w-28'), ('輸入值','w-32'), ('審核','w-24'), ('操作','w-28')]:
+                    ui.label(h).classes(w)
+            ui.separator().classes('opacity-20')
+            # Table Rows
+            for r in items:
+                render_row(r)
+
+        # Pagination Controls
         with ui.row().classes('items-center justify-between pt-2'):
             ui.label(f'第 {state.web_page}/{max_page} 頁 · 每頁 {page_size} 筆 · 共 {total} 筆').classes('muted')
             with ui.row().classes('gap-2'):
-                ui.button('上一頁', icon='chevron_left', on_click=lambda: (setattr(state,'web_page', max(1,state.web_page-1)), refresh())).props('flat')
-                ui.button('下一頁', icon='chevron_right', on_click=lambda: (setattr(state,'web_page', min(max_page, state.web_page+1)), refresh())).props('flat')
+                ui.button('上一頁', icon='chevron_left', on_click=lambda: (setattr(state, 'web_page', max(1, state.web_page - 1)), asyncio.create_task(refresh_cases()))).props('flat')
+                ui.button('下一頁', icon='chevron_right', on_click=lambda: (setattr(state, 'web_page', min(max_page, state.web_page + 1)), asyncio.create_task(refresh_cases()))).props('flat')
 
-    # Initial data load
-    if state.web_list is None:
-        asyncio.create_task(do_clear())
+    def render_row(r):
+        rid = r.get('id')
+        with ui.row().classes('items-center py-1'):
+            ui.checkbox(value=(rid in state.web_selected_ids), on_change=lambda e, rid=rid: (state.web_selected_ids.remove(rid) if rid in state.web_selected_ids else state.web_selected_ids.add(rid)) or table_container.refresh())
+            ui.label(str(rid)).classes('w-16')
+            ui.label(r.get('feature','')).classes('w-32')
+            ui.label(r.get('step','')).classes('w-20')
+            ui.label(r.get('action','')).classes('w-28')
+            ui.label(r.get('desc','')).classes('w-[20%]')
+            ui.label(r.get('page','')).classes('w-28')
+            ui.label(r.get('element','')).classes('w-28')
+            ui.label(r.get('value','')).classes('w-32')
+            # Review status dropdown
+            is_reviewed = r.get('review') == '已審核'
+            async def on_status_change(e, record_id=rid):
+                show_loading()
+                try:
+                    await api.update_web_case(state.active_project_id, record_id, {'review': e.value})
+                    await api.log_action(f"Updated web case id={record_id} status to {e.value}")
+                    ui.notify('已更新審核狀態', type='positive')
+                    await refresh_cases()
+                except Exception as ex:
+                    ui.notify(f'更新失敗: {ex}', type='negative')
+                finally:
+                    hide_loading()
+            s = ui.select(['未審核','已審核'], value=r.get('review','未審核'), on_change=on_status_change).props('dense').classes('w-24')
+            if is_reviewed: s.props('readonly disable')
+            # Action buttons
+            with ui.row().classes('w-28 gap-1'):
+                ui.button(icon='edit', on_click=lambda r=r: open_dialog(r)).props('flat')
+                async def del_one(case_id=rid):
+                    show_loading()
+                    try:
+                        await api.delete_web_case(state.active_project_id, case_id)
+                        await api.log_action(f"Deleted web case id={case_id}")
+                        ui.notify(f'已刪除案例 {case_id}', type='positive')
+                        await refresh_cases()
+                    except Exception as e:
+                        ui.notify(f'刪除失敗: {e}', type='negative')
+                    finally:
+                        hide_loading()
+                ui.button(icon='delete', on_click=del_one).props('flat')
 
+    async def bulk_delete():
+        ids_to_delete = list(state.web_selected_ids)
+        if not ids_to_delete: return
+        show_loading()
+        try:
+            for case_id in ids_to_delete:
+                await api.delete_web_case(state.active_project_id, case_id)
+            await api.log_action(f"Bulk deleted {len(ids_to_delete)} web cases.")
+            ui.notify(f'已刪除 {len(ids_to_delete)} 筆', type='positive')
+            state.web_selected_ids.clear()
+            await refresh_cases()
+        except Exception as e:
+            ui.notify(f'刪除失敗: {e}', type='negative')
+        finally:
+            hide_loading()
 
-
-def render_app_cases(main_area):
-    ui.label(f'目前專案：{state.active_project_name}').classes('text-sm opacity-70')
-    ui.separator()
-
-    # Define items at the top to resolve UnboundLocalError in nested functions
-    items = state.app_list or []
-
-    # Dialog for adding/editing APP test cases
-    def open_dialog(edit_id: int | None = None):
-        """打開新增/編輯 APP 測試案例的對話框，顯示不可編輯的編號欄位"""
-        editing = None
-        if edit_id is not None:
-            for p in state.app_list or []:
-                if str(p.get('id')) == str(edit_id):
-                    editing = p
-                    break
-        current_list = state.app_list or []
-        next_id = max([int(p.get('id', 0)) for p in current_list] + [0]) + 1
+    def open_dialog(editing_case: dict | None = None):
         with ui.dialog() as d:
             with ui.card().classes('p-4 min-w-[560px]'):
-                ui.label('新增測試案例' if not editing else '修改測試案例').classes('text-lg font-semibold')
-                cols = ui.grid(columns=2).classes('gap-2 mt-2')
-                with cols:
-                    id_input = ui.input('編號(自動帶入)').props('outlined dense disabled')
+                ui.label('新增測試案例' if not editing_case else '修改測試案例').classes('text-lg font-semibold')
+                # Form fields
+                with ui.grid(columns=2).classes('gap-2 mt-2'):
                     feature = ui.input('測試功能').props('outlined dense')
                     step = ui.input('測試步驟').props('outlined dense')
                     action = ui.select(['前往網址','填入','點擊','等待','檢查','選擇','檔案上傳'], label='動作').props('outlined dense')
@@ -930,59 +800,31 @@ def render_app_cases(main_area):
                     page_ = ui.input('頁面').props('outlined dense')
                     elem = ui.input('元件').props('outlined dense')
                     val = ui.input('輸入值').props('outlined dense')
-                # 填入編輯值或新 ID
-                if editing:
-                    id_input.value = str(editing.get('id', ''))
-                    feature.value = editing.get('feature', '')
-                    step.value = editing.get('step', '')
-                    action.value = editing.get('action', '')
-                    desc.value = editing.get('desc', '')
-                    page_.value = editing.get('page', '')
-                    elem.value = editing.get('element', '')
-                    val.value = editing.get('value', '')
-                else:
-                    id_input.value = str(next_id)
+                if editing_case:
+                    feature.value = editing_case.get('feature', '')
+                    step.value = editing_case.get('step', '')
+                    action.value = editing_case.get('action', '')
+                    desc.value = editing_case.get('desc', '')
+                    page_.value = editing_case.get('page', '')
+                    elem.value = editing_case.get('element', '')
+                    val.value = editing_case.get('value', '')
+
                 with ui.row().classes('justify-end gap-2 mt-3'):
                     ui.button('取消', on_click=d.close).props('flat')
                     async def save():
+                        payload = {
+                            'feature': feature.value, 'step': step.value, 'action': action.value,
+                            'desc': desc.value, 'page': page_.value, 'element': elem.value, 'value': val.value
+                        }
                         show_loading()
                         try:
-                            action_desc = "created new app case"
-                            if editing:
-                                action_desc = f"updated app case id={editing.get('id')}"
-
-                            data = state.app_list or []
-                            if editing:
-                                for i, p in enumerate(data):
-                                    if str(p.get('id')) == str(editing.get('id')):
-                                        data[i] = {**p,
-                                                   'feature': feature.value or '',
-                                                   'step': step.value or '',
-                                                   'action': action.value or '',
-                                                   'desc': desc.value or '',
-                                                   'page': page_.value or '',
-                                                   'element': elem.value or '',
-                                                   'value': val.value or ''}
-                                        break
+                            if editing_case:
+                                await api.update_web_case(state.active_project_id, editing_case['id'], payload)
                             else:
-                                new_id = next_id
-                                data.append({
-                                    'id': new_id,
-                                    'feature': feature.value or '',
-                                    'step': step.value or '',
-                                    'action': action.value or '',
-                                    'desc': desc.value or '',
-                                    'page': page_.value or '',
-                                    'element': elem.value or '',
-                                    'value': val.value or '',
-                                    'review': '未審核'
-                                })
-                            write_scoped_list(APP_CASES_FILE, state.active_project_id, data)
-                            state.app_list = data
-                            await api.log_action(action_desc)
-                            ui.notify('儲存成功！', type='positive')
+                                await api.create_web_case(state.active_project_id, payload)
                             d.close()
-                            ui.navigate.reload()
+                            await refresh_cases()
+                            ui.notify('儲存成功！', type='positive')
                         except Exception as e:
                             ui.notify(f"儲存失敗: {e}", type='negative')
                         finally:
@@ -992,199 +834,290 @@ def render_app_cases(main_area):
 
     # Search & actions
     with ui.row().classes('gap-2 items-end flex-wrap'):
-        kw_in = ui.input('關鍵字').props('dense outlined').classes('min-w-[260px]')
-        kw_in.value = state.app_kw
-
-        async def do_query():
-            show_loading()
-            try:
-                state.app_kw = kw_in.value or ''
-                state.app_page = 1
-                result = await api.list_app_cases(state.active_project_id, keyword=state.app_kw)
-                state.app_list = result.get('items', [])
-                await api.log_action(f"Searched app cases with keyword: {state.app_kw}")
-                refresh()
-                ui.notify('查詢完成', type='positive')
-            except Exception as e:
-                ui.notify(f'查詢失敗: {e}', type='negative')
-            finally:
-                hide_loading()
-
-        async def do_clear():
-            show_loading()
-            try:
-                state.app_kw = ''
-                kw_in.value = ''
-                state.app_page = 1
-                result = await api.list_app_cases(state.active_project_id)
-                state.app_list = result.get('items', [])
-                refresh()
-            finally:
-                hide_loading()
-
-        ui.button('查詢', icon='search', on_click=do_query).props('color=primary')
-        ui.button('清除搜尋條件', icon='backspace', on_click=do_clear).props('flat')
+        kw_in = ui.input('關鍵字', on_change=refresh_cases).bind_value(state, 'web_kw').props('dense outlined')
         ui.button('新增', icon='add', on_click=lambda: open_dialog()).props('color=accent')
-        ui.button('輸入設備資訊', icon='smartphone', on_click=lambda: open_device()).props('flat')
 
-    # The filtering is now done by the backend API.
-    # We use the 'items' variable consistently, which is defined at the top of the function.
-    page_size = 10
-    total = len(items)
-    max_page = max(1, (total+page_size-1)//page_size)
-    state.app_page = min(max(1,state.app_page), max_page)
-    start = (state.app_page-1)*page_size
-    page_rows = items[start:start+page_size]
+    # Initial data load
+    asyncio.create_task(refresh_cases())
 
-    def refresh():
-        try:
-            main_area.refresh()
-        except Exception:
-            pass
 
-    def save_items(new_items):
-        write_scoped_list(APP_CASES_FILE, state.active_project_id, new_items)
-        state.app_list = new_items; refresh()
 
-    # Device info dialog
-    def open_device():
-        current = (read_scoped_list(APP_DEVICE_FILE, state.active_project_id) or [''])[0] if isinstance(read_scoped_list(APP_DEVICE_FILE, state.active_project_id), list) else ''
-        with ui.dialog() as d:
-            with ui.card().classes('p-4 min-w-[560px]'):
-                ui.label('設備資訊').classes('text-lg font-semibold')
-                ta = ui.textarea('貼上或輸入設備資訊').props('outlined').classes('w-[520px] h-[200px]')
-                ta.value = current or ''
-                with ui.row().classes('justify-end gap-2 mt-3'):
-                    ui.button('取消', on_click=d.close).props('flat')
-                    async def save_dev():
-                        show_loading()
-                        try:
-                            write_scoped_list(APP_DEVICE_FILE, state.active_project_id, [ta.value or ''])
-                            await api.log_action(f"Saved device info for project {state.active_project_id}")
-                            d.close()
-                            ui.notify('已儲存設備資訊', type='positive')
-                            ui.navigate.reload()
-                        except Exception as e:
-                            ui.notify(f'儲存失敗: {e}', type='negative')
-                        finally:
-                            hide_loading()
-                    ui.button('儲存', on_click=save_dev, color='primary')
-        d.open()
+async def render_app_cases(main_area):
+    ui.label(f'目前專案：{state.active_project_name}').classes('text-sm opacity-70')
+    ui.separator()
 
-    # Bulk toolbar
-    def clear_sel():
-        state.app_selected_ids.clear(); refresh()
-    async def bulk_delete():
-        ids = set(state.app_selected_ids)
-        if not ids: return
+    table_container = ui.column().classes('w-full')
+
+    async def refresh_cases():
         show_loading()
+        table_container.clear()
         try:
-            new_items = [x for x in items if x.get('id') not in ids]
-            save_items(new_items)
-            await api.log_action(f"Bulk deleted {len(ids)} app cases.")
-            ui.notify(f'已刪除 {len(ids)} 筆', type='positive')
-            ui.navigate.reload()
+            result = await api.list_app_cases(
+                state.active_project_id,
+                keyword=state.app_kw,
+                action=",".join(state.app_action),
+                result=",".join(state.app_result)
+            )
+            state.app_list = result.get('items', [])
+            with table_container:
+                render_table(state.app_list, result.get('total', 0))
         except Exception as e:
-            ui.notify(f'刪除失敗: {e}', type='negative')
+            with table_container:
+                ui.label(f'Error loading app cases: {e}').classes('text-negative')
         finally:
             hide_loading()
-    bulk_toolbar(state.app_selected_ids, [('刪除選取','delete', bulk_delete), ('清除選取','close', clear_sel)])
 
-    if not page_rows and total==0:
-        empty_state('尚無 APP 測試案例', '點擊右上角「新增」建立第一筆。', '新增', on_click=lambda: open_dialog())
-        return
+    def render_table(items, total):
+        page_size = 50
+        max_page = max(1, (total + page_size - 1) // page_size)
+        state.app_page = min(max(1, state.app_page), max_page)
 
-    with ui.element('div').classes('soft-card p-2'):
-        with ui.row().classes('text-sm muted items-center py-1'):
-            ui.checkbox(on_change=lambda e: (state.app_selected_ids.update(r.get('id') for r in page_rows) if e.value else state.app_selected_ids.clear()) or refresh())
-            for h, w in [
-                ('編號','w-16'), ('測試功能','w-32'), ('測試步驟','w-20'), ('動作','w-28'),
-                ('敘述','w-[20%]'), ('頁面','w-28'), ('元件','w-28'), ('輸入值','w-32'),
-                ('審核','w-24'), ('操作','w-28')
-            ]:
-                ui.label(h).classes(w)
-        ui.separator().classes('opacity-20')
+        bulk_toolbar(state.app_selected_ids, [
+            ('刪除選取', 'delete', bulk_delete),
+            ('清除選取', 'close', lambda: (state.app_selected_ids.clear(), table_container.refresh()))
+        ])
 
-        for r in page_rows:
-            rid = r.get('id')
-            with ui.row().classes('items-center py-1'):
-                def toggle_row(v=None, _rid=rid):
-                    if _rid in state.app_selected_ids: state.app_selected_ids.remove(_rid)
-                    else: state.app_selected_ids.add(_rid); refresh()
-                ui.checkbox(value=(rid in state.app_selected_ids), on_change=lambda e, rid=rid: toggle_row(e.value, rid))
-                ui.label(str(r.get('id'))).classes('w-16')
-                ui.label(r.get('feature','')).classes('w-32')
-                ui.label(r.get('step','')).classes('w-20')
-                ui.label(r.get('action','')).classes('w-28')
-                ui.label(r.get('desc','')).classes('w-[20%]')
-                ui.label(r.get('page','')).classes('w-28')
-                ui.label(r.get('element','')).classes('w-28')
-                ui.label(r.get('value','')).classes('w-32')
-                # 審核狀態下拉選單
-                is_reviewed = r.get('review') == '已審核'
-                async def on_status_change(e, record=r):
-                    show_loading()
-                    try:
-                        record.update({'review': e.value})
-                        write_scoped_list(APP_CASES_FILE, state.active_project_id, state.app_list)
-                        setattr(state, 'app_list', state.app_list)
-                        await api.log_action(f"Updated app case id={record.get('id')} status to {e.value}")
-                        ui.notify('已更新審核狀態', type='positive')
-                        ui.navigate.reload()
-                    except Exception as ex:
-                        ui.notify(f'更新失敗: {ex}', type='negative')
-                    finally:
-                        hide_loading()
-                s = ui.select(['未審核','已審核'], value=r.get('review','未審核'), on_change=on_status_change).props('dense').classes('w-24')
-                if is_reviewed:
-                    s.props('readonly disable')
-                with ui.row().classes('w-28 gap-1'):
-                    ui.button(icon='edit', on_click=lambda rid=rid: open_dialog(rid)).props('flat')
-                    async def _del_one(_rid=rid):
-                        show_loading()
-                        try:
-                            save_items([x for x in items if x.get('id') != _rid])
-                            await api.log_action(f"Deleted app case id={_rid}")
-                            ui.notify('已刪除 1 筆', type='positive')
-                            ui.navigate.reload()
-                        except Exception as e:
-                            ui.notify(f'刪除失敗: {e}', type='negative')
-                        finally:
-                            hide_loading()
-                    ui.button(icon='delete', on_click=_del_one).props('flat')
+        if not items and total == 0:
+            empty_state('尚無 APP 測試案例', '點擊右上角「新增」建立第一筆。', '新增', on_click=lambda: open_dialog())
+            return
+
+        with ui.element('div').classes('soft-card p-2'):
+            with ui.row().classes('text-sm muted items-center py-1'):
+                ui.checkbox(on_change=lambda e: (state.app_selected_ids.update(r.get('id') for r in items) if e.value else state.app_selected_ids.clear()) or table_container.refresh())
+                for h, w in [('編號','w-16'), ('測試功能','w-32'), ('測試步驟','w-20'), ('動作','w-28'),
+                             ('敘述','w-[20%]'), ('頁面','w-28'), ('元件','w-28'), ('輸入值','w-32'), ('審核','w-24'), ('操作','w-28')]:
+                    ui.label(h).classes(w)
+            ui.separator().classes('opacity-20')
+            for r in items:
+                render_row(r)
 
         with ui.row().classes('items-center justify-between pt-2'):
             ui.label(f'第 {state.app_page}/{max_page} 頁 · 每頁 {page_size} 筆 · 共 {total} 筆').classes('muted')
             with ui.row().classes('gap-2'):
-                ui.button('上一頁', icon='chevron_left', on_click=lambda: (setattr(state,'app_page', max(1,state.app_page-1)), refresh())).props('flat')
-                ui.button('下一頁', icon='chevron_right', on_click=lambda: (setattr(state,'app_page', min(max_page, state.app_page+1)), refresh())).props('flat')
+                ui.button('上一頁', icon='chevron_left', on_click=lambda: (setattr(state, 'app_page', max(1, state.app_page - 1)), asyncio.create_task(refresh_cases()))).props('flat')
+                ui.button('下一頁', icon='chevron_right', on_click=lambda: (setattr(state, 'app_page', min(max_page, state.app_page + 1)), asyncio.create_task(refresh_cases()))).props('flat')
 
-    # Initial data load
-    if state.app_list is None:
-        asyncio.create_task(do_clear())
+    def render_row(r):
+        rid = r.get('id')
+        with ui.row().classes('items-center py-1'):
+            ui.checkbox(value=(rid in state.app_selected_ids), on_change=lambda e, rid=rid: (state.app_selected_ids.remove(rid) if rid in state.app_selected_ids else state.app_selected_ids.add(rid)) or table_container.refresh())
+            ui.label(str(rid)).classes('w-16')
+            ui.label(r.get('feature','')).classes('w-32')
+            ui.label(r.get('step','')).classes('w-20')
+            ui.label(r.get('action','')).classes('w-28')
+            ui.label(r.get('desc','')).classes('w-[20%]')
+            ui.label(r.get('page','')).classes('w-28')
+            ui.label(r.get('element','')).classes('w-28')
+            ui.label(r.get('value','')).classes('w-32')
+            is_reviewed = r.get('review') == '已審核'
+            async def on_status_change(e, record_id=rid):
+                show_loading()
+                try:
+                    await api.update_app_case(state.active_project_id, record_id, {'review': e.value})
+                    await api.log_action(f"Updated app case id={record_id} status to {e.value}")
+                    ui.notify('已更新審核狀態', type='positive')
+                    await refresh_cases()
+                except Exception as ex:
+                    ui.notify(f'更新失敗: {ex}', type='negative')
+                finally:
+                    hide_loading()
+            s = ui.select(['未審核','已審核'], value=r.get('review','未審核'), on_change=on_status_change).props('dense').classes('w-24')
+            if is_reviewed: s.props('readonly disable')
+            with ui.row().classes('w-28 gap-1'):
+                ui.button(icon='edit', on_click=lambda r=r: open_dialog(r)).props('flat')
+                async def del_one(case_id=rid):
+                    show_loading()
+                    try:
+                        await api.delete_app_case(state.active_project_id, case_id)
+                        await api.log_action(f"Deleted app case id={case_id}")
+                        ui.notify(f'已刪除案例 {case_id}', type='positive')
+                        await refresh_cases()
+                    except Exception as e:
+                        ui.notify(f'刪除失敗: {e}', type='negative')
+                    finally:
+                        hide_loading()
+                ui.button(icon='delete', on_click=del_one).props('flat')
+
+    async def bulk_delete():
+        ids_to_delete = list(state.app_selected_ids)
+        if not ids_to_delete: return
+        show_loading()
+        try:
+            for case_id in ids_to_delete:
+                await api.delete_app_case(state.active_project_id, case_id)
+            await api.log_action(f"Bulk deleted {len(ids_to_delete)} app cases.")
+            ui.notify(f'已刪除 {len(ids_to_delete)} 筆', type='positive')
+            state.app_selected_ids.clear()
+            await refresh_cases()
+        except Exception as e:
+            ui.notify(f'刪除失敗: {e}', type='negative')
+        finally:
+            hide_loading()
+
+    def open_dialog(editing_case: dict | None = None):
+        with ui.dialog() as d:
+            with ui.card().classes('p-4 min-w-[560px]'):
+                ui.label('新增測試案例' if not editing_case else '修改測試案例').classes('text-lg font-semibold')
+                with ui.grid(columns=2).classes('gap-2 mt-2'):
+                    feature = ui.input('測試功能').props('outlined dense')
+                    step = ui.input('測試步驟').props('outlined dense')
+                    action = ui.select(['前往網址','填入','點擊','等待','檢查','選擇','檔案上傳'], label='動作').props('outlined dense')
+                    desc = ui.input('敘述').props('outlined dense')
+                    page_ = ui.input('頁面').props('outlined dense')
+                    elem = ui.input('元件').props('outlined dense')
+                    val = ui.input('輸入值').props('outlined dense')
+                if editing_case:
+                    feature.value = editing_case.get('feature', '')
+                    step.value = editing_case.get('step', '')
+                    action.value = editing_case.get('action', '')
+                    desc.value = editing_case.get('desc', '')
+                    page_.value = editing_case.get('page', '')
+                    elem.value = editing_case.get('element', '')
+                    val.value = editing_case.get('value', '')
+                with ui.row().classes('justify-end gap-2 mt-3'):
+                    ui.button('取消', on_click=d.close).props('flat')
+                    async def save():
+                        payload = {
+                            'feature': feature.value, 'step': step.value, 'action': action.value,
+                            'desc': desc.value, 'page': page_.value, 'element': elem.value, 'value': val.value
+                        }
+                        show_loading()
+                        try:
+                            if editing_case:
+                                await api.update_app_case(state.active_project_id, editing_case['id'], payload)
+                            else:
+                                await api.create_app_case(state.active_project_id, payload)
+                            d.close()
+                            await refresh_cases()
+                            ui.notify('儲存成功！', type='positive')
+                        except Exception as e:
+                            ui.notify(f"儲存失敗: {e}", type='negative')
+                        finally:
+                            hide_loading()
+                    ui.button('儲存', color='primary', on_click=save)
+        d.open()
+
+    with ui.row().classes('gap-2 items-end flex-wrap'):
+        kw_in = ui.input('關鍵字', on_change=refresh_cases).bind_value(state, 'app_kw').props('dense outlined')
+        ui.button('新增', icon='add', on_click=lambda: open_dialog()).props('color=accent')
+        # ui.button('輸入設備資訊', icon='smartphone', on_click=lambda: open_device()).props('flat') # TODO: Re-implement device info
+
+    asyncio.create_task(refresh_cases())
 
 
-def render_api_cases(main_area):
+async def render_api_cases(main_area):
     ui.label(f'目前專案：{state.active_project_name}').classes('text-sm opacity-70')
     ui.separator()
 
-    # Define items at the top to resolve UnboundLocalError in nested functions
-    items = state.api_list or []
+    table_container = ui.column().classes('w-full')
 
-    # Dialog for adding/editing API test cases
-    def open_dialog(edit_step: int | None = None):
-        """打開新增/編輯 API 測試案例的對話框。"""
-        editing = None
-        if edit_step is not None:
-            for p in state.api_list or []:
-                if str(p.get('step')) == str(edit_step):
-                    editing = p
-                    break
+    async def refresh_cases():
+        show_loading()
+        table_container.clear()
+        try:
+            result = await api.list_api_cases(
+                state.active_project_id,
+                keyword=state.api_kw,
+                method=",".join(state.api_method),
+                result=",".join(state.api_result)
+            )
+            state.api_list = result.get('items', [])
+            with table_container:
+                render_table(state.api_list, result.get('total', 0))
+        except Exception as e:
+            with table_container:
+                ui.label(f'Error loading API cases: {e}').classes('text-negative')
+        finally:
+            hide_loading()
+
+    def render_table(items, total):
+        page_size = 50
+        max_page = max(1, (total + page_size - 1) // page_size)
+        state.api_page = min(max(1, state.api_page), max_page)
+
+        bulk_toolbar(state.api_selected_ids, [
+            ('刪除選取', 'delete', bulk_delete),
+            ('清除選取', 'close', lambda: (state.api_selected_ids.clear(), table_container.refresh()))
+        ])
+
+        if not items and total == 0:
+            empty_state('尚無 API 測試案例', '點擊右上角「新增」建立第一筆。', '新增', on_click=lambda: open_dialog())
+            return
+
+        with ui.element('div').classes('soft-card p-2'):
+            with ui.row().classes('text-sm muted items-center py-1'):
+                ui.checkbox(on_change=lambda e: (state.api_selected_ids.update(r.get('id') for r in items) if e.value else state.api_selected_ids.clear()) or table_container.refresh())
+                for h, w in [('ID','w-16'), ('測試功能','w-32'), ('方法','w-20'), ('URL','w-[20%]'), ('API路徑','w-32'), ('審核','w-24'), ('操作','w-28')]:
+                    ui.label(h).classes(w)
+            ui.separator().classes('opacity-20')
+            for r in items:
+                render_row(r)
+
+        with ui.row().classes('items-center justify-between pt-2'):
+            ui.label(f'第 {state.api_page}/{max_page} 頁 · 每頁 {page_size} 筆 · 共 {total} 筆').classes('muted')
+            with ui.row().classes('gap-2'):
+                ui.button('上一頁', icon='chevron_left', on_click=lambda: (setattr(state, 'api_page', max(1, state.api_page - 1)), asyncio.create_task(refresh_cases()))).props('flat')
+                ui.button('下一頁', icon='chevron_right', on_click=lambda: (setattr(state, 'api_page', min(max_page, state.api_page + 1)), asyncio.create_task(refresh_cases()))).props('flat')
+
+    def render_row(r):
+        rid = r.get('id')
+        with ui.row().classes('items-center py-1'):
+            ui.checkbox(value=(rid in state.api_selected_ids), on_change=lambda e, rid=rid: (state.api_selected_ids.remove(rid) if rid in state.api_selected_ids else state.api_selected_ids.add(rid)) or table_container.refresh())
+            ui.label(str(rid)).classes('w-16')
+            ui.label(r.get('test_feature','')).classes('w-32')
+            ui.label(r.get('method','')).classes('w-20')
+            ui.label(r.get('url','')).classes('w-[20%]')
+            ui.label(r.get('api_path','')).classes('w-32')
+            is_reviewed = r.get('review') == '已審核'
+            async def on_status_change(e, record_id=rid):
+                show_loading()
+                try:
+                    await api.update_api_case(state.active_project_id, record_id, {'review': e.value})
+                    await api.log_action(f"Updated api case id={record_id} status to {e.value}")
+                    ui.notify('已更新審核狀態', type='positive')
+                    await refresh_cases()
+                except Exception as ex:
+                    ui.notify(f'更新失敗: {ex}', type='negative')
+                finally:
+                    hide_loading()
+            s = ui.select(['未審核','已審核'], value=r.get('review','未審核'), on_change=on_status_change).props('dense').classes('w-24')
+            if is_reviewed: s.props('readonly disable')
+            with ui.row().classes('w-28 gap-1'):
+                ui.button(icon='edit', on_click=lambda r=r: open_dialog(r)).props('flat')
+                async def del_one(case_id=rid):
+                    show_loading()
+                    try:
+                        await api.delete_api_case(state.active_project_id, case_id)
+                        await api.log_action(f"Deleted api case id={case_id}")
+                        ui.notify(f'已刪除案例 {case_id}', type='positive')
+                        await refresh_cases()
+                    except Exception as e:
+                        ui.notify(f'刪除失敗: {e}', type='negative')
+                    finally:
+                        hide_loading()
+                ui.button(icon='delete', on_click=del_one).props('flat')
+
+    async def bulk_delete():
+        ids_to_delete = list(state.api_selected_ids)
+        if not ids_to_delete: return
+        show_loading()
+        try:
+            for case_id in ids_to_delete:
+                await api.delete_api_case(state.active_project_id, case_id)
+            await api.log_action(f"Bulk deleted {len(ids_to_delete)} api cases.")
+            ui.notify(f'已刪除 {len(ids_to_delete)} 筆', type='positive')
+            state.api_selected_ids.clear()
+            await refresh_cases()
+        except Exception as e:
+            ui.notify(f'刪除失敗: {e}', type='negative')
+        finally:
+            hide_loading()
+
+    def open_dialog(editing_case: dict | None = None):
         with ui.dialog() as d:
             with ui.card().classes('p-4 min-w-[760px]'):
-                ui.label('新增 API 測試案例' if not editing else '修改 API 測試案例').classes('text-lg font-semibold')
-                cols = ui.grid(columns=2).classes('gap-2 mt-2')
-                with cols:
+                ui.label('新增 API 測試案例' if not editing_case else '修改 API 測試案例').classes('text-lg font-semibold')
+                with ui.grid(columns=2).classes('gap-2 mt-2'):
                     step = ui.input('步驟').props('outlined dense')
                     feature = ui.input('測試功能').props('outlined dense')
                     method = ui.select(['POST','GET','PUT','PATCH','DELETE'], label='方法').props('outlined dense')
@@ -1195,60 +1128,37 @@ def render_api_cases(main_area):
                     expect_status = ui.input('預期狀態碼').props('outlined dense')
                     expect_field = ui.input('預期欄位').props('outlined dense')
                     expect_value = ui.input('預期值').props('outlined dense')
-                    # 移除測試結果與備註欄位
                     response_summary = ui.textarea('回應摘要').props('outlined dense')
-                # 填入編輯值
-                if editing:
-                    step.value = str(editing.get('step',''))
-                    feature.value = editing.get('feature','')
-                    method.value = editing.get('method','')
-                    url.value = editing.get('url','')
-                    api_path.value = editing.get('api_path','')
-                    header.value = editing.get('header','')
-                    body.value = editing.get('body','')
-                    expect_status.value = str(editing.get('expect_status',''))
-                    expect_field.value = editing.get('expect_field','')
-                    expect_value.value = editing.get('expect_value','')
-                    response_summary.value = editing.get('response_summary','')
+                if editing_case:
+                    step.value = str(editing_case.get('step',''))
+                    feature.value = editing_case.get('feature','')
+                    method.value = editing_case.get('method','')
+                    url.value = editing_case.get('url','')
+                    api_path.value = editing_case.get('api_path','')
+                    header.value = editing_case.get('header','')
+                    body.value = editing_case.get('body','')
+                    expect_status.value = str(editing_case.get('expect_status',''))
+                    expect_field.value = editing_case.get('expect_field','')
+                    expect_value.value = editing_case.get('expect_value','')
+                    response_summary.value = editing_case.get('response_summary','')
                 with ui.row().classes('justify-end gap-2 mt-3'):
                     ui.button('取消', on_click=d.close).props('flat')
                     async def save():
+                        payload = {
+                            'step': int(step.value) if step.value.isdigit() else 0, 'feature': feature.value, 'method': method.value,
+                            'url': url.value, 'api_path': api_path.value, 'header': header.value, 'body': body.value,
+                            'expect_status': expect_status.value, 'expect_field': expect_field.value, 'expect_value': expect_value.value,
+                            'response_summary': response_summary.value
+                        }
                         show_loading()
                         try:
-                            action_desc = "created new api case"
-                            if editing:
-                                action_desc = f"updated api case step={editing.get('step')}"
-
-                            data = state.api_list or []
-                            # construct record
-                            rec = {
-                                'step': int(step.value or 0) if (step.value or '').isdigit() else step.value or 0,
-                                'feature': feature.value or '',
-                                'method': method.value or '',
-                                'url': url.value or '',
-                                'api_path': api_path.value or '',
-                                'header': header.value or '',
-                                'body': body.value or '',
-                                'expect_status': int(expect_status.value or 0) if (expect_status.value or '').isdigit() else expect_status.value or '',
-                                'expect_field': expect_field.value or '',
-                                'expect_value': expect_value.value or '',
-                                'response_summary': response_summary.value or '',
-                                # 新增審核欄位，預設未審核
-                                'review': editing.get('review','未審核') if editing else '未審核'
-                            }
-                            if editing:
-                                for i,p in enumerate(data):
-                                    if str(p.get('step')) == str(editing.get('step')):
-                                        data[i] = rec
-                                        break
+                            if editing_case:
+                                await api.update_api_case(state.active_project_id, editing_case['id'], payload)
                             else:
-                                data.append(rec)
-                            write_scoped_list(API_CASES_FILE, state.active_project_id, data)
-                            state.api_list = data
-                            await api.log_action(action_desc)
-                            ui.notify('儲存成功！', type='positive')
+                                await api.create_api_case(state.active_project_id, payload)
                             d.close()
-                            ui.navigate.reload()
+                            await refresh_cases()
+                            ui.notify('儲存成功！', type='positive')
                         except Exception as e:
                             ui.notify(f"儲存失敗: {e}", type='negative')
                         finally:
@@ -1257,387 +1167,139 @@ def render_api_cases(main_area):
         d.open()
 
     with ui.row().classes('gap-2 items-end flex-wrap'):
-        kw_in = ui.input('關鍵字').props('dense outlined').classes('min-w-[320px]')
-        kw_in.value = state.api_kw
-
-        async def do_query():
-            show_loading()
-            try:
-                state.api_kw = kw_in.value or ''
-                state.api_page = 1
-                result = await api.list_api_cases(state.active_project_id, keyword=state.api_kw)
-                state.api_list = result.get('items', [])
-                await api.log_action(f"Searched API cases with keyword: {state.api_kw}")
-                refresh()
-                ui.notify('查詢完成', type='positive')
-            except Exception as e:
-                ui.notify(f'查詢失敗: {e}', type='negative')
-            finally:
-                hide_loading()
-
-        async def do_clear():
-            show_loading()
-            try:
-                state.api_kw = ''
-                kw_in.value = ''
-                state.api_page = 1
-                result = await api.list_api_cases(state.active_project_id)
-                state.api_list = result.get('items', [])
-                refresh()
-            finally:
-                hide_loading()
-
-        ui.button('查詢', icon='search', on_click=do_query).props('color=primary')
-        ui.button('清除搜尋條件', icon='backspace', on_click=do_clear).props('flat')
+        kw_in = ui.input('關鍵字', on_change=refresh_cases).bind_value(state, 'api_kw').props('dense outlined')
         ui.button('新增', icon='add', on_click=lambda: open_dialog()).props('color=accent')
 
-    # The filtering is now done by the backend API.
-    # We use the 'items' variable consistently, which is defined at the top of the function.
-    page_size = 10
-    total = len(items)
-    max_page = max(1, (total+page_size-1)//page_size)
-    state.api_page = min(max(1,state.api_page), max_page)
-    start = (state.api_page-1)*page_size
-    page_rows = items[start:start+page_size]
-
-    def refresh():
-        try:
-            main_area.refresh()
-        except Exception:
-            pass
-
-    def save_items(new_items):
-        write_scoped_list(API_CASES_FILE, state.active_project_id, new_items)
-        state.api_list = new_items; refresh()
-
-    def clear_sel():
-        state.api_selected_ids.clear(); refresh()
-    async def bulk_delete():
-        ids = set(state.api_selected_ids)
-        if not ids: return
-        show_loading()
-        try:
-            save_items([x for x in items if x.get('step') not in ids])
-            await api.log_action(f"Bulk deleted {len(ids)} API cases.")
-            ui.notify(f'已刪除 {len(ids)} 筆', type='positive')
-            ui.navigate.reload()
-        except Exception as e:
-            ui.notify(f'刪除失敗: {e}', type='negative')
-        finally:
-            hide_loading()
-    bulk_toolbar(state.api_selected_ids, [('刪除選取','delete', bulk_delete), ('清除選取','close', clear_sel)])
-
-    if not page_rows and total==0:
-        empty_state('尚無 API 測試案例', '點擊右上角「新增」建立第一筆。', '新增', on_click=lambda: open_dialog())
-        return
-
-    with ui.element('div').classes('soft-card p-2'):
-        with ui.row().classes('text-sm muted items-center py-1'):
-            ui.checkbox(on_change=lambda e: (state.api_selected_ids.update(r.get('step') for r in page_rows) if e.value else state.api_selected_ids.clear()) or refresh())
-            for h, w in [
-                ('步驟','w-16'), ('測試功能','w-32'), ('方法','w-20'), ('URL','w-[20%]'), ('API路徑','w-32'),
-                ('Header','w-32'), ('請求Body','w-32'), ('預期狀態碼','w-24'), ('預期欄位','w-28'), ('預期值','w-24'),
-                ('回應摘要','w-32'), ('審核','w-24'), ('操作','w-28')
-            ]:
-                ui.label(h).classes(w)
-        ui.separator().classes('opacity-20')
-
-        for r in page_rows:
-            sid = r.get('step')
-            with ui.row().classes('items-center py-1'):
-                def toggle_row(v=None, _sid=sid):
-                    if _sid in state.api_selected_ids: state.api_selected_ids.remove(_sid)
-                    else: state.api_selected_ids.add(_sid); refresh()
-                ui.checkbox(value=(sid in state.api_selected_ids), on_change=lambda e, sid=sid: toggle_row(e.value, sid))
-                ui.label(str(r.get('step'))).classes('w-16')
-                ui.label(r.get('feature','')).classes('w-32')
-                ui.label(r.get('method','')).classes('w-20')
-                ui.label(r.get('url','')).classes('w-[20%]')
-                ui.label(r.get('api_path','')).classes('w-32')
-                ui.label(r.get('header','')).classes('w-32')
-                ui.label(r.get('body','')).classes('w-32')
-                ui.label(str(r.get('expect_status',''))).classes('w-24')
-                ui.label(r.get('expect_field','')).classes('w-28')
-                ui.label(r.get('expect_value','')).classes('w-24')
-                ui.label(r.get('response_summary','')).classes('w-32')
-                # 審核狀態下拉選單，未審核/已審核
-                is_reviewed = r.get('review') == '已審核'
-                async def on_status_change(e, record=r):
-                    show_loading()
-                    try:
-                        record.update({'review': e.value})
-                        write_scoped_list(API_CASES_FILE, state.active_project_id, state.api_list)
-                        setattr(state, 'api_list', state.api_list)
-                        await api.log_action(f"Updated API case step={record.get('step')} status to {e.value}")
-                        ui.notify('已更新審核狀態', type='positive')
-                        ui.navigate.reload()
-                    except Exception as ex:
-                        ui.notify(f'更新失敗: {ex}', type='negative')
-                    finally:
-                        hide_loading()
-                s = ui.select(['未審核','已審核'], value=r.get('review','未審核'), on_change=on_status_change).props('dense').classes('w-24')
-                if is_reviewed:
-                    s.props('readonly disable')
-                with ui.row().classes('w-28 gap-1'):
-                    ui.button(icon='edit', on_click=lambda sid=sid: open_dialog(sid)).props('flat')
-                    async def _del_one(_sid=sid):
-                        show_loading()
-                        try:
-                            save_items([x for x in items if x.get('step') != _sid])
-                            await api.log_action(f"Deleted API case step={_sid}")
-                            ui.notify('已刪除 1 筆', type='positive')
-                            ui.navigate.reload()
-                        except Exception as e:
-                            ui.notify(f'刪除失敗: {e}', type='negative')
-                        finally:
-                            hide_loading()
-                    ui.button(icon='delete', on_click=_del_one).props('flat')
-
-        with ui.row().classes('items-center justify-between pt-2'):
-            ui.label(f'第 {state.api_page}/{max_page} 頁 · 每頁 {page_size} 筆 · 共 {total} 筆').classes('muted')
-            with ui.row().classes('gap-2'):
-                ui.button('上一頁', icon='chevron_left', on_click=lambda: (setattr(state,'api_page', max(1,state.api_page-1)), refresh())).props('flat')
-                ui.button('下一頁', icon='chevron_right', on_click=lambda: (setattr(state,'api_page', min(max_page, state.api_page+1)), refresh())).props('flat')
-
-    # Initial data load
-    if state.api_list is None:
-        asyncio.create_task(do_clear())
+    asyncio.create_task(refresh_cases())
 
 
 
-def render_bugs(main_area):
+async def render_bugs(main_area):
     ui.label(f'目前專案：{state.active_project_name}').classes('text-sm opacity-70')
     ui.separator()
 
-    # Define items at the top to resolve UnboundLocalError in nested functions
-    items = state.bug_list or []
+    table_container = ui.column().classes('w-full')
 
-    # Dialog for adding/editing BUG
-    def open_dialog(edit_id: int | None = None):
-        editing = None
-        if edit_id is not None:
-            for p in state.bug_list or []:
-                if str(p.get('id')) == str(edit_id):
-                    editing = p
-                    break
-        with ui.dialog() as d:
-            with ui.card().classes('p-4 min-w-[760px]'):
-                ui.label('新增 BUG' if not editing else '修改 BUG').classes('text-lg font-semibold')
-                cols = ui.grid(columns=2).classes('gap-2 mt-2')
-                with cols:
-                    title = ui.input('問題敘述').props('outlined dense')
-                    severity = ui.select(['高','中','低'], label='嚴重度').props('outlined dense')
-                    status = ui.select(['新增','進行中','關閉','駁回'], label='狀態').props('outlined dense')
-                    repro = ui.textarea('重現步驟').props('outlined dense')
-                    expected = ui.textarea('預期結果').props('outlined dense')
-                    actual = ui.textarea('實際結果').props('outlined dense')
-                    note = ui.input('備註').props('outlined dense')
-                    upload_name = ui.label('').classes('muted')
-                    def on_upload(e):
-                        # Save uploaded files to UPLOADS_DIR and update label
-                        for f in e.files:
-                            name = f.name
-                            (UPLOADS_DIR / name).write_bytes(f.content.read())
-                            upload_name.text = name
-                            ui.notify('已上傳', type='positive')
-                    ui.upload(on_upload=on_upload, auto_upload=True).props('accept="image/*"')
-                if editing:
-                    title.value = editing.get('title','')
-                    severity.value = editing.get('severity','中')
-                    status.value = editing.get('status','新增')
-                    repro.value = editing.get('repro','')
-                    expected.value = editing.get('expected','')
-                    actual.value = editing.get('actual','')
-                    note.value = editing.get('note','')
-                    upload_name.text = editing.get('screenshot','') or ''
-                with ui.row().classes('justify-end gap-2 mt-3'):
-                    ui.button('取消', on_click=d.close).props('flat')
-                    def save():
-                        data = state.bug_list or []
-                        # Determine id
-                        rec_id = editing.get('id') if editing else (max([int(p.get('id',0)) for p in data] + [0]) + 1)
-                        rec = {
-                            'id': rec_id,
-                            'title': title.value or '',
-                            'severity': severity.value or '中',
-                            'status': status.value or '新增',
-                            'repro': repro.value or '',
-                            'expected': expected.value or '',
-                            'actual': actual.value or '',
-                            'note': note.value or '',
-                            'screenshot': upload_name.text or ''
-                        }
-                        if editing:
-                            for i, p in enumerate(data):
-                                if str(p.get('id')) == str(editing.get('id')):
-                                    data[i] = rec
-                                    break
-                        else:
-                            data.append(rec)
-                        write_scoped_list(BUGS_FILE, state.active_project_id, data)
-                        state.bug_list = data
-                        d.close()
-                        ui.notify('已儲存', type='positive')
-                        try:
-                            main_area.refresh()
-                        except Exception:
-                            pass
-                    ui.button('儲存', color='primary', on_click=save)
-        d.open()
-
-    # Filters
-    with ui.row().classes('gap-2 items-end flex-wrap'):
-        kw_in = ui.input('關鍵字（問題敘述/重現步驟/預期/實際/備註）').props('dense outlined').classes('min-w-[320px]')
-        kw_in.value = state.bug_filter_kw
-
-        async def do_query():
-            show_loading()
-            try:
-                state.bug_filter_kw = kw_in.value or ''
-                state.bug_page = 1
-                state.bug_list = await api.list_project_bugs(state.active_project_id, keyword=state.bug_filter_kw)
-                await api.log_action(f"Searched bugs with keyword: {state.bug_filter_kw}")
-                refresh()
-                ui.notify('查詢完成', type='positive')
-            except Exception as e:
-                ui.notify(f'查詢失敗: {e}', type='negative')
-            finally:
-                hide_loading()
-
-        async def do_clear():
-            show_loading()
-            try:
-                state.bug_filter_kw = ''
-                kw_in.value = ''
-                state.bug_page = 1
-                state.bug_list = await api.list_project_bugs(state.active_project_id)
-                refresh()
-            finally:
-                hide_loading()
-
-        ui.button('查詢', icon='search', on_click=do_query).props('color=primary')
-        ui.button('清除搜尋條件', icon='backspace', on_click=do_clear).props('flat')
-        ui.button('新增', icon='add', on_click=lambda: open_dialog()).props('color=accent')
-
-    # The filtering is now done by the backend API.
-    # We use the 'items' variable consistently, which is defined at the top of the function.
-    page_size = 10
-    total = len(items)
-    max_page = max(1, (total+page_size-1)//page_size)
-    state.bug_page = min(max(1,state.bug_page), max_page)
-    start = (state.bug_page-1)*page_size
-    page_rows = items[start:start+page_size]
-
-    def refresh():
-        try: main_area.refresh()
-        except Exception: pass
-
-    def save_items(new_items):
-        write_scoped_list(BUGS_FILE, state.active_project_id, new_items)
-        state.bug_list = new_items; refresh()
-
-    def clear_sel():
-        state.bug_selected_ids.clear(); refresh()
-    async def bulk_delete():
-        ids = set(state.bug_selected_ids)
-        if not ids: return
+    async def refresh_bugs():
         show_loading()
+        table_container.clear()
         try:
-            save_items([x for x in items if x.get('id') not in ids])
-            await api.log_action(f"Bulk deleted {len(ids)} bugs.")
-            ui.notify(f'已刪除 {len(ids)} 筆', type='positive')
-            ui.navigate.reload()
+            items = await api.list_project_bugs(
+                state.active_project_id,
+                keyword=state.bug_filter_kw,
+                severity=state.bug_filter_status.copy().pop() if state.bug_filter_status else "",
+                status="" # Status filter not implemented in UI yet
+            )
+            state.bug_list = items
+            with table_container:
+                render_table(items)
         except Exception as e:
-            ui.notify(f'刪除失敗: {e}', type='negative')
+            with table_container:
+                ui.label(f'Error loading bugs: {e}').classes('text-negative')
         finally:
             hide_loading()
-    bulk_toolbar(state.bug_selected_ids, [('刪除選取','delete', bulk_delete), ('清除選取','close', clear_sel)])
 
-    if not page_rows and total==0:
-        empty_state('尚無 BUG', '點擊右上角「新增」建立第一筆。', '新增', on_click=lambda: open_dialog())
-        return
+    def render_table(items):
+        page_size = 10
+        total = len(items)
+        max_page = max(1, (total + page_size - 1) // page_size)
+        state.bug_page = min(max(1, state.bug_page), max_page)
+        start = (state.bug_page - 1) * page_size
+        page_rows = items[start:start+page_size]
 
-    with ui.element('div').classes('soft-card p-2'):
-        with ui.row().classes('text-sm muted items-center py-1'):
-            ui.checkbox(on_change=lambda e: (state.bug_selected_ids.update(r.get('id') for r in page_rows) if e.value else state.bug_selected_ids.clear()) or refresh())
-            for h, w in [('問題敘述','w-[22%]'), ('嚴重度','w-20'), ('狀態','w-24'), ('重現步驟','w-[20%]'),
-                         ('預期結果','w-[18%]'), ('實際結果','w-[18%]'), ('備註','w-[16%]'), ('截圖','w-28'), ('操作','w-28')]:
-                ui.label(h).classes(w)
-        ui.separator().classes('opacity-20')
+        bulk_toolbar(state.bug_selected_ids, [
+            ('刪除選取', 'delete', bulk_delete),
+            ('清除選取', 'close', lambda: (state.bug_selected_ids.clear(), table_container.refresh()))
+        ])
 
-        for r in page_rows:
-            rid = r.get('id')
-            with ui.row().classes('items-center py-1'):
-                def toggle_row(v=None, _rid=rid):
-                    if _rid in state.bug_selected_ids: state.bug_selected_ids.remove(_rid)
-                    else: state.bug_selected_ids.add(_rid); refresh()
-                ui.checkbox(value=(rid in state.bug_selected_ids), on_change=lambda e, rid=rid: toggle_row(e.value, rid))
-                ui.label(r.get('title','')).classes('w-[22%]')
-                with ui.element('div').classes('w-20'):
-                    status_badge(r.get('severity',''), CASE_STATUS_COLORS)
-                # 狀態欄改為下拉選單，可即時更新
-                is_reviewed = r.get('status') == '已審核'
-                options = ['新增','進行中','關閉','駁回', '已審核']
-                async def on_status_change(e, record=r):
-                    show_loading()
-                    try:
-                        record.update({'status': e.value})
-                        write_scoped_list(BUGS_FILE, state.active_project_id, state.bug_list)
-                        setattr(state, 'bug_list', state.bug_list)
-                        await api.log_action(f"Updated bug id={record.get('id')} status to {e.value}")
-                        ui.notify('已更新狀態', type='positive')
-                        ui.navigate.reload()
-                    except Exception as ex:
-                        ui.notify(f'更新失敗: {ex}', type='negative')
-                    finally:
-                        hide_loading()
-                s = ui.select(options, value=r.get('status','新增'), on_change=on_status_change).props('dense').classes('w-24')
-                if is_reviewed:
-                    s.props('readonly disable')
-                ui.label(r.get('repro','')).classes('w-[20%]')
-                ui.label(r.get('expected','')).classes('w-[18%]')
-                ui.label(r.get('actual','')).classes('w-[18%]')
-                ui.label(r.get('note','')).classes('w-[16%]')
-                img = r.get('screenshot')
-                with ui.row().classes('w-28'):
-                    if img:
-                        ui.link('查看', f"/uploads/{img}")
-                with ui.row().classes('w-28 gap-1'):
-                    ui.button(icon='edit', on_click=lambda rid=rid: open_dialog(rid)).props('flat')
-                    async def del_one(bug_id=rid):
-                        show_loading()
-                        try:
-                            save_items([x for x in items if x.get('id') != bug_id])
-                            await api.log_action(f"Deleted bug id={bug_id}")
-                            ui.notify(f'已刪除 BUG {bug_id}', type='positive')
-                            ui.navigate.reload()
-                        except Exception as e:
-                            ui.notify(f'刪除失敗: {e}', type='negative')
-                        finally:
-                            hide_loading()
-                    ui.button(icon='delete', on_click=del_one).props('flat')
+        if not page_rows and total == 0:
+            empty_state('尚無 BUG', '點擊右上角「新增」建立第一筆。', '新增', on_click=lambda: open_dialog())
+            return
+
+        with ui.element('div').classes('soft-card p-2'):
+            with ui.row().classes('text-sm muted items-center py-1'):
+                ui.checkbox(on_change=lambda e: (state.bug_selected_ids.update(r.get('id') for r in page_rows) if e.value else state.bug_selected_ids.clear()) or table_container.refresh())
+                for h, w in [('問題敘述','w-[22%]'), ('嚴重度','w-20'), ('狀態','w-24'), ('重現步驟','w-[20%]'),
+                             ('預期結果','w-[18%]'), ('實際結果','w-[18%]'), ('備註','w-[16%]'), ('截圖','w-28'), ('操作','w-28')]:
+                    ui.label(h).classes(w)
+            ui.separator().classes('opacity-20')
+
+            for r in page_rows:
+                render_row(r)
 
         with ui.row().classes('items-center justify-between pt-2'):
             ui.label(f'第 {state.bug_page}/{max_page} 頁 · 每頁 {page_size} 筆 · 共 {total} 筆').classes('muted')
             with ui.row().classes('gap-2'):
-                ui.button('上一頁', icon='chevron_left', on_click=lambda: (setattr(state,'bug_page', max(1,state.bug_page-1)), refresh())).props('flat')
-                ui.button('下一頁', icon='chevron_right', on_click=lambda: (setattr(state,'bug_page', min(max_page, state.bug_page+1)), refresh())).props('flat')
+                ui.button('上一頁', icon='chevron_left', on_click=lambda: (setattr(state, 'bug_page', max(1, state.bug_page - 1)), asyncio.create_task(refresh_bugs()))).props('flat')
+                ui.button('下一頁', icon='chevron_right', on_click=lambda: (setattr(state, 'bug_page', min(max_page, state.bug_page + 1)), asyncio.create_task(refresh_bugs()))).props('flat')
 
-    # Initial data load
-    if state.bug_list is None:
-        asyncio.create_task(do_clear())
+    def render_row(r):
+        rid = r.get('id')
+        with ui.row().classes('items-center py-1'):
+            ui.checkbox(value=(rid in state.bug_selected_ids), on_change=lambda e, rid=rid: (state.bug_selected_ids.remove(rid) if rid in state.bug_selected_ids else state.bug_selected_ids.add(rid)) or table_container.refresh())
+            ui.label(r.get('description','')).classes('w-[22%]') # Using description as title
+            with ui.element('div').classes('w-20'):
+                status_badge(r.get('severity',''), CASE_STATUS_COLORS)
+            is_reviewed = r.get('status') == '已審核'
+            options = ['新增','進行中','關閉','駁回', '已審核']
+            async def on_status_change(e, record_id=rid):
+                show_loading()
+                try:
+                    await api.update_project_bug(state.active_project_id, record_id, {'status': e.value})
+                    await api.log_action(f"Updated bug id={record_id} status to {e.value}")
+                    ui.notify('已更新狀態', type='positive')
+                    await refresh_bugs()
+                except Exception as ex:
+                    ui.notify(f'更新失敗: {ex}', type='negative')
+                finally:
+                    hide_loading()
+            s = ui.select(options, value=r.get('status','新增'), on_change=on_status_change).props('dense').classes('w-24')
+            if is_reviewed: s.props('readonly disable')
+            ui.label(r.get('repro','')).classes('w-[20%]')
+            ui.label(r.get('expected','')).classes('w-[18%]')
+            ui.label(r.get('actual','')).classes('w-[18%]')
+            ui.label(r.get('note','')).classes('w-[16%]')
+            img = r.get('screenshot')
+            with ui.row().classes('w-28'):
+                if img:
+                    ui.link('查看', f"/uploads/{img}")
+            with ui.row().classes('w-28 gap-1'):
+                ui.button(icon='edit', on_click=lambda r=r: open_dialog(r)).props('flat')
+                async def del_one(bug_id=rid):
+                    show_loading()
+                    try:
+                        await api.delete_project_bug(state.active_project_id, bug_id)
+                        await api.log_action(f"Deleted bug id={bug_id}")
+                        ui.notify(f'已刪除 BUG {bug_id}', type='positive')
+                        await refresh_bugs()
+                    except Exception as e:
+                        ui.notify(f'刪除失敗: {e}', type='negative')
+                    finally:
+                        hide_loading()
+                ui.button(icon='delete', on_click=del_one).props('flat')
 
-    def open_dialog(edit_id: int | None = None):
-        editing = None
-        if edit_id is not None:
-            for p in state.bug_list or []:
-                if str(p.get('id'))==str(edit_id): editing = p; break
+    async def bulk_delete():
+        ids_to_delete = list(state.bug_selected_ids)
+        if not ids_to_delete: return
+        show_loading()
+        try:
+            for bug_id in ids_to_delete:
+                await api.delete_project_bug(state.active_project_id, bug_id)
+            await api.log_action(f"Bulk deleted {len(ids_to_delete)} bugs.")
+            ui.notify(f'已刪除 {len(ids_to_delete)} 筆', type='positive')
+            state.bug_selected_ids.clear()
+            await refresh_bugs()
+        except Exception as e:
+            ui.notify(f'刪除失敗: {e}', type='negative')
+        finally:
+            hide_loading()
+
+    def open_dialog(editing_bug: dict | None = None):
         with ui.dialog() as d:
             with ui.card().classes('p-4 min-w-[760px]'):
-                ui.label('新增 BUG' if not editing else '修改 BUG').classes('text-lg font-semibold')
-                cols = ui.grid(columns=2).classes('gap-2 mt-2')
-                with cols:
-                    title = ui.input('問題敘述').props('outlined dense')
+                ui.label('新增 BUG' if not editing_bug else '修改 BUG').classes('text-lg font-semibold')
+                with ui.grid(columns=2).classes('gap-2 mt-2'):
+                    desc = ui.input('問題敘述').props('outlined dense')
                     severity = ui.select(['高','中','低'], label='嚴重度').props('outlined dense')
                     status = ui.select(['新增','進行中','關閉','駁回'], label='狀態').props('outlined dense')
                     repro = ui.textarea('重現步驟').props('outlined dense')
@@ -1646,49 +1308,48 @@ def render_bugs(main_area):
                     note = ui.input('備註').props('outlined dense')
                     upload_name = ui.label('').classes('muted')
                     def on_upload(e):
-                        # Save uploaded file to UPLOADS_DIR and set name
-                        for f in e.files:
-                            name = f.name
-                            # Save bytes
-                            (UPLOADS_DIR / name).write_bytes(f.content.read())
-                            upload_name.text = name
-                            ui.notify('已上傳', type='positive')
-                    ui.upload(on_upload=on_upload, auto_upload=True).props('accept=\"image/*\"')
-                if editing:
-                    title.value = editing.get('title',''); severity.value = editing.get('severity','中'); status.value = editing.get('status','新增')
-                    repro.value = editing.get('repro',''); expected.value = editing.get('expected',''); actual.value = editing.get('actual',''); note.value = editing.get('note','')
-                    upload_name.text = editing.get('screenshot','') or ''
+                        # This part remains client-side as it needs to interact with the local filesystem
+                        # The backend would need an upload endpoint to handle the file bytes
+                        pass
+                    ui.upload(on_upload=on_upload, auto_upload=True).props('accept="image/*"')
+                if editing_bug:
+                    desc.value = editing_bug.get('description','')
+                    severity.value = editing_bug.get('severity','中')
+                    status.value = editing_bug.get('status','新增')
+                    repro.value = editing_bug.get('repro','')
+                    expected.value = editing_bug.get('expected','')
+                    actual.value = editing_bug.get('actual','')
+                    note.value = editing_bug.get('note','')
+                    upload_name.text = editing_bug.get('screenshot','') or ''
                 with ui.row().classes('justify-end gap-2 mt-3'):
                     ui.button('取消', on_click=d.close).props('flat')
                     async def save():
+                        payload = {
+                            'description': desc.value, 'severity': severity.value, 'status': status.value,
+                            'repro': repro.value, 'expected': expected.value, 'actual': actual.value,
+                            'note': note.value, 'screenshot': upload_name.text
+                        }
                         show_loading()
                         try:
-                            action_desc = "created new bug"
-                            if editing:
-                                action_desc = f"updated bug id={editing.get('id')}"
-
-                            data = state.bug_list or []
-                            rec = {'id': (editing.get('id') if editing else (max([int(p.get('id',0)) for p in data] + [0]) + 1)),
-                                   'title': title.value or '', 'severity': severity.value or '中', 'status': status.value or '新增',
-                                   'repro': repro.value or '', 'expected': expected.value or '', 'actual': actual.value or '',
-                                   'note': note.value or '', 'screenshot': upload_name.text or ''}
-                            if editing:
-                                for i,p in enumerate(data):
-                                    if str(p.get('id'))==str(editing.get('id')): data[i] = rec; break
+                            if editing_bug:
+                                await api.update_project_bug(state.active_project_id, editing_bug['id'], payload)
                             else:
-                                data.append(rec)
-
-                            save_items(data)
-                            await api.log_action(action_desc)
-                            ui.notify('儲存成功！', type='positive')
+                                await api.create_project_bug(state.active_project_id, payload)
                             d.close()
-                            ui.navigate.reload()
+                            await refresh_bugs()
+                            ui.notify('儲存成功！', type='positive')
                         except Exception as e:
                             ui.notify(f"儲存失敗: {e}", type='negative')
                         finally:
                             hide_loading()
                     ui.button('儲存', color='primary', on_click=save)
         d.open()
+
+    with ui.row().classes('gap-2 items-end flex-wrap'):
+        kw_in = ui.input('關鍵字', on_change=refresh_bugs).bind_value(state, 'bug_filter_kw').props('dense outlined')
+        ui.button('新增', icon='add', on_click=lambda: open_dialog()).props('color=accent')
+
+    asyncio.create_task(refresh_bugs())
 
 
 # === Pages ===

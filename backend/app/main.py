@@ -27,8 +27,9 @@ from .storage import (
     list_project_bugs, get_project_bug, create_project_bug, update_project_bug, delete_project_bug,
     # Paths for case types
     WEB_CASES_PATH, APP_CASES_PATH, API_CASES_PATH, APP_DEVICE_PATH,
+    get_all_mocks, save_mock
 )
-from .mock_storage import get_all_mocks, save_mock
+from .database import init_db
 
 
 # ---- Data directories (default to project-root /data) ----
@@ -57,6 +58,12 @@ if not os.getenv("SKIP_UPLOAD"):
 @app.get('/favicon.ico', include_in_schema=False)
 def _favicon():
     return Response(status_code=204)
+
+# ---- App startup event ----
+@app.on_event("startup")
+async def on_startup():
+    """Initialize the database when the application starts."""
+    init_db()
 
 app.add_middleware(
     CORSMiddleware,

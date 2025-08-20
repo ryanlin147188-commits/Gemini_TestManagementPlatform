@@ -86,6 +86,25 @@ async def list_web_cases(project_id: int, keyword: str = "", action: str = "", r
         r.raise_for_status()
         return r.json()
 
+async def create_web_case(project_id: int, payload: dict):
+    async with httpx.AsyncClient(timeout=15.0) as client:
+        r = await client.post(f"{base_url()}/projects/{project_id}/webcases", json=payload)
+        r.raise_for_status()
+        return r.json()
+
+async def update_web_case(project_id: int, case_id: int, payload: dict):
+    async with httpx.AsyncClient(timeout=15.0) as client:
+        r = await client.put(f"{base_url()}/projects/{project_id}/webcases/{case_id}", json=payload)
+        r.raise_for_status()
+        return r.json()
+
+async def delete_web_case(project_id: int, case_id: int):
+    async with httpx.AsyncClient(timeout=10.0) as client:
+        r = await client.delete(f"{base_url()}/projects/{project_id}/webcases/{case_id}")
+        if r.status_code not in (200, 204):
+            r.raise_for_status()
+        return True
+
 async def list_app_cases(project_id: int, keyword: str = "", action: str = "", result: str = ""):
     params = {"q": keyword, "action": action, "result": result}
     params = {k: v for k, v in params.items() if v}
@@ -93,6 +112,25 @@ async def list_app_cases(project_id: int, keyword: str = "", action: str = "", r
         r = await client.get(f"{base_url()}/projects/{project_id}/appcases", params=params)
         r.raise_for_status()
         return r.json()
+
+async def create_app_case(project_id: int, payload: dict):
+    async with httpx.AsyncClient(timeout=15.0) as client:
+        r = await client.post(f"{base_url()}/projects/{project_id}/appcases", json=payload)
+        r.raise_for_status()
+        return r.json()
+
+async def update_app_case(project_id: int, case_id: int, payload: dict):
+    async with httpx.AsyncClient(timeout=15.0) as client:
+        r = await client.put(f"{base_url()}/projects/{project_id}/appcases/{case_id}", json=payload)
+        r.raise_for_status()
+        return r.json()
+
+async def delete_app_case(project_id: int, case_id: int):
+    async with httpx.AsyncClient(timeout=10.0) as client:
+        r = await client.delete(f"{base_url()}/projects/{project_id}/appcases/{case_id}")
+        if r.status_code not in (200, 204):
+            r.raise_for_status()
+        return True
 
 async def list_api_cases(project_id: int, keyword: str = "", method: str = "", result: str = ""):
     params = {"q": keyword, "method": method, "result": result}
@@ -102,6 +140,25 @@ async def list_api_cases(project_id: int, keyword: str = "", method: str = "", r
         r.raise_for_status()
         return r.json()
 
+async def create_api_case(project_id: int, payload: dict):
+    async with httpx.AsyncClient(timeout=15.0) as client:
+        r = await client.post(f"{base_url()}/projects/{project_id}/apicases", json=payload)
+        r.raise_for_status()
+        return r.json()
+
+async def update_api_case(project_id: int, step: int, payload: dict):
+    async with httpx.AsyncClient(timeout=15.0) as client:
+        r = await client.put(f"{base_url()}/projects/{project_id}/apicases/{step}", json=payload)
+        r.raise_for_status()
+        return r.json()
+
+async def delete_api_case(project_id: int, step: int):
+    async with httpx.AsyncClient(timeout=10.0) as client:
+        r = await client.delete(f"{base_url()}/projects/{project_id}/apicases/{step}")
+        if r.status_code not in (200, 204):
+            r.raise_for_status()
+        return True
+
 async def list_project_bugs(project_id: int, keyword: str = "", severity: str = "", status: str = ""):
     params = {"q": keyword, "severity": severity, "status": status}
     params = {k: v for k, v in params.items() if v}
@@ -109,6 +166,25 @@ async def list_project_bugs(project_id: int, keyword: str = "", severity: str = 
         r = await client.get(f"{base_url()}/projects/{project_id}/bugs", params=params)
         r.raise_for_status()
         return r.json()
+
+async def create_project_bug(project_id: int, payload: dict):
+    async with httpx.AsyncClient(timeout=15.0) as client:
+        r = await client.post(f"{base_url()}/projects/{project_id}/bugs", json=payload)
+        r.raise_for_status()
+        return r.json()
+
+async def update_project_bug(project_id: int, bug_id: int, payload: dict):
+    async with httpx.AsyncClient(timeout=15.0) as client:
+        r = await client.put(f"{base_url()}/projects/{project_id}/bugs/{bug_id}", json=payload)
+        r.raise_for_status()
+        return r.json()
+
+async def delete_project_bug(project_id: int, bug_id: int):
+    async with httpx.AsyncClient(timeout=10.0) as client:
+        r = await client.delete(f"{base_url()}/projects/{project_id}/bugs/{bug_id}")
+        if r.status_code not in (200, 204):
+            r.raise_for_status()
+        return True
 
 # ---- Bugs ----
 async def list_bugs(keyword: str = ""):
