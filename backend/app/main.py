@@ -915,6 +915,121 @@ def api_trigger_api(payload: dict | None = None):
         "log_dir": log_dir,
     }
 
+# ---------- App test run state ----------
+apptest_running = False
+apptest_thread = None
+
+# ---------- App test trigger ----------
+@app.post("/runs/trigger-app")
+def api_trigger_app(payload: dict | None = None):
+    """
+    Trigger execution of mobile app test cases using Appium and Allure.
+    The payload must contain Appium configuration details.
+    """
+    global apptest_running, apptest_thread
+    if apptest_running:
+        raise HTTPException(status_code=409, detail="An App test run is already in progress")
+
+    # --- Parse payload ---
+    if not isinstance(payload, dict):
+        raise HTTPException(status_code=400, detail="Request payload must be a JSON object")
+
+    project_id = int(payload.get("project_id", 1) or 1)
+    case_ids = payload.get("case_ids")
+    if case_ids:
+        case_ids = [str(x) for x in case_ids]
+    else:
+        case_ids = None # Run all cases if not specified
+
+    # Appium-specific config from payload with defaults
+    app_file_name = payload.get("app_file_name")
+    platform_name = payload.get("platform_name", "Android")
+    platform_version = payload.get("platform_version", "13.0")
+    device_name = payload.get("device_name", "Android Emulator")
+
+    if not app_file_name:
+        raise HTTPException(status_code=400, detail="Payload must include 'app_file_name'")
+
+    # --- Setup directories and temp files ---
+    ts = time.strftime("%Y%m%d%H%M%S")
+    result_dir = os.path.join(DATA_DIR, "allure-results", ts)
+    report_dir = os.path.join(DATA_DIR, "allure-report", ts)
+    log_dir = os.path.join(LOG_DIR_BASE, ts)
+    os.makedirs(result_dir, exist_ok=True)
+    os.makedirs(report_dir, exist_ok=True)
+    os.makedirs(log_dir, exist_ok=True)
+
+    tmp_cases_path = os.path.join(DATA_DIR, f"tmp_app_cases_{ts}.json")
+    try:
+        all_cases = list_cases(APP_CASES_PATH, project_id, None, None)
+        selected_cases = [c for c in all_cases if case_ids is None or str(c.get("id")) in case_ids]
+        with open(tmp_cases_path, "w", encoding="utf-8") as f:
+            json.dump({str(project_id): selected_cases}, f, ensure_ascii=False, indent=2)
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=f"Failed to write temporary cases file: {e}")
+
+    # --- Worker thread ---
+    def _app_worker() -> None:
+        global apptest_running
+        try:
+            env = os.environ.copy()
+            env["APP_TEST_CASES_FILE"] = tmp_cases_path
+            env["APP_ELEMENTS_FILE"] = os.path.join(os.path.dirname(__file__), "app_elements.json")
+            env["PROJECT_ID"] = str(project_id)
+            env["APP_FILE_NAME"] = app_file_name
+            env["PLATFORM_NAME"] = platform_name
+            env["PLATFORM_VERSION"] = platform_version
+            env["DEVICE_NAME"] = device_name
+
+            script_path = os.path.join(os.path.dirname(__file__), "app_test_runner.py")
+            cmd = ["pytest", script_path, "-q", f"--alluredir={result_dir}"]
+            log_path = os.path.join(log_dir, "run.log")
+
+            with open(log_path, "w", encoding="utf-8") as lf:
+                proc = subprocess.Popen(cmd, cwd=ROOT_DIR, env=env, stdout=subprocess.PIPE, stderr=subprocess.STDOUT, text=True)
+                for line in proc.stdout:
+                    lf.write(line)
+                    lf.flush()
+                    asyncio.run(_pytest_broadcast(line.rstrip()))
+                rc = proc.wait()
+                finish_msg = f"[apptest] finished with code {rc}"
+                lf.write(f"{finish_msg}\\n")
+                lf.flush()
+                asyncio.run(_pytest_broadcast(finish_msg))
+
+            allure_cmd = shutil.which("allure")
+            if allure_cmd:
+                gen_cmd = [allure_cmd, "generate", result_dir, "-o", report_dir, "-c"]
+                proc2 = subprocess.run(gen_cmd, capture_output=True, text=True)
+                if proc2.returncode != 0:
+                    err_msg = f"[apptest] allure generate failed: {proc2.stderr.strip() or proc2.stdout.strip()}"
+                    with open(log_path, "a", encoding="utf-8") as lf2:
+                        lf2.write(f"{err_msg}\\n")
+                    asyncio.run(_pytest_broadcast(err_msg))
+        except Exception as e:
+            err_msg = f"[apptest] error: {e}"
+            try:
+                with open(os.path.join(log_dir, "run.log"), "a", encoding="utf-8") as lf3:
+                    lf3.write(f"{err_msg}\\n")
+            except Exception:
+                pass
+            asyncio.run(_pytest_broadcast(err_msg))
+        finally:
+            apptest_running = False
+
+    apptest_running = True
+    apptest_thread = threading.Thread(target=_app_worker, daemon=True)
+    apptest_thread.start()
+
+    return {
+        "ok": True,
+        "message": "app test started",
+        "run_id": ts,
+        "results_dir": result_dir,
+        "report_dir": report_dir,
+        "log_dir": log_dir,
+    }
+
 @app.websocket("/ws/test-run")
 async def ws_test_run(websocket: WebSocket):
     await websocket.accept()
