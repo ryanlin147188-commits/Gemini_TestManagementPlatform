@@ -123,7 +123,8 @@ def setup_theme():
 # 建立一個全域的 loading spinner，在各個頁面切換和資料更新時可以顯示。
 # 由於它是在模組載入時建立，因此會存在於所有頁面之上。利用 Tailwind 的
 # `fixed inset-0` 等類別將其置中並覆蓋整個畫面，並設置半透明背景。
-loading_spinner = ui.spinner(size='lg', color='primary').classes('fixed inset-0 flex items-center justify-center z-50 bg-white/50')
+# We apply a very high z-index to ensure it appears above all other elements, including dialogs.
+loading_spinner = ui.spinner(size='lg', color='primary').classes('fixed inset-0 flex items-center justify-center bg-white/50').style('z-index: 9999')
 # 預設隱藏，只有在需要時才顯示
 loading_spinner.visible = False
 
@@ -1774,14 +1775,20 @@ def render_reports(main_area):
                                       on_change=on_status_change).props('dense').classes('w-24')
                             if is_reviewed:
                                 s.props('readonly disable')
-                            def _open(p=path):
-                                """Open an Allure report in a new window with a specific size."""
+                            def _open_report(p=path):
+                                """Open the Allure HTML report in a new window."""
                                 base_url = os.getenv('BACKEND_URL') or 'http://127.0.0.1:8000'
                                 full_url = f'{base_url}{p}'
                                 js_command = f"window.open('{full_url}', '_blank', 'width=1920,height=1080');"
                                 ui.run_javascript(js_command)
 
-                            ui.button('查看', on_click=_open).props('flat color=primary')
+                            def _show_raw_path(n=name):
+                                """Show the local path to the raw allure-results directory."""
+                                raw_path = ROOT / 'data' / 'allure-results' / n
+                                ui.notify(f"原始檔路徑: {raw_path}", multi_line=True, close_button=True)
+
+                            ui.button('查看報告', on_click=_open_report).props('flat color=primary')
+                            ui.button('顯示原始檔路徑', on_click=_show_raw_path).props('flat color=secondary')
         except Exception as e:
             reports_list.clear()
             # Display error message in the report list column
@@ -2110,6 +2117,7 @@ def render_automation(main_area):
                     log_area.value = "" # Clear log on new connection
                     async for msg in ws:
                         log_area.value += (msg + '\n')
+                        log_area.update()
                         if '[webtest] finished' in msg:
                             await show_completion_dialog('測試完成', 'WEB 測試已執行完畢。')
                             await api.log_action("WEB test run finished.")
