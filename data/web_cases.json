@@ -8,7 +8,18 @@
       "desc": "開啟",
       "page": "",
       "element": "",
-      "value": "http://www.google.com",
+      "value": "https://data.taipei/dataset/listdownload",
+      "review": "未審核"
+    },
+    {
+      "id": 2,
+      "feature": "檢查",
+      "step": "2",
+      "action": "檢查",
+      "desc": "資料清單下載",
+      "page": "",
+      "element": "name=\"資料清單下載\"",
+      "value": "",
       "review": "未審核"
     }
   ]
