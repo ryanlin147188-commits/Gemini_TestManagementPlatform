@@ -33,6 +33,21 @@ async def delete_project(project_id: int):
             r.raise_for_status()
         return True
 
+# ---- Mock API ----
+async def get_mocks():
+    """Fetches the list of all active mock configurations."""
+    async with httpx.AsyncClient(timeout=10.0) as client:
+        r = await client.get(f"{base_url()}/api/mocks")
+        r.raise_for_status()
+        return r.json()
+
+async def create_mock(config: dict):
+    """Sends a new mock configuration to the backend."""
+    async with httpx.AsyncClient(timeout=15.0) as client:
+        r = await client.post(f"{base_url()}/api/mock", json=config)
+        r.raise_for_status()
+        return r.json()
+
 # ---- Case Names ----
 async def list_web_case_names(project_id: int):
     async with httpx.AsyncClient(timeout=10.0) as client:
