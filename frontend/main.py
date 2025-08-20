@@ -1,20 +1,71 @@
 from nicegui import ui, app
-
 from fastapi.responses import Response
-@app.get('/favicon.ico', include_in_schema=False)
-def _frontend_favicon():
-    return Response(status_code=204)
-
-
 import datetime as dt
 import os
 import httpx
 import asyncio
 import api
+from dataclasses import dataclass, field
+from typing import List, Dict, Callable, Optional
 
-# === Theme & global styles ===
+# Basic App Setup
+@app.get('/favicon.ico', include_in_schema=False)
+def _frontend_favicon():
+    return Response(status_code=204)
 
-# === Sidebar configuration & layout ===
+# UPLOADS_DIR is still needed for the upload component
+from pathlib import Path
+ROOT = Path(__file__).resolve().parent.parent
+DATA_DIR = ROOT / 'data'
+UPLOADS_DIR = DATA_DIR / 'uploads'
+UPLOADS_DIR.mkdir(exist_ok=True)
+app.add_static_files('/uploads', str(UPLOADS_DIR))
+
+
+# === App State ===
+@dataclass
+class AppState:
+    active_project_id: int = 1
+    active_project_name: str = '未選取'
+    projects: List[Dict] = field(default_factory=list)
+
+    # Page-specific data lists
+    web_list: List[Dict] = field(default_factory=list)
+    app_list: List[Dict] = field(default_factory=list)
+    api_list: List[Dict] = field(default_factory=list)
+    bug_list: List[Dict] = field(default_factory=list)
+
+    # Page-specific filters and pagination
+    prj_kw: str = ''
+    prj_page: int = 1
+    prj_page_size: int = 10
+    prj_selected_ids: set = field(default_factory=set)
+
+    web_kw: str = ''
+    web_page: int = 1
+    web_selected_ids: set = field(default_factory=set)
+
+    app_kw: str = ''
+    app_page: int = 1
+    app_selected_ids: set = field(default_factory=set)
+
+    api_kw: str = ''
+    api_page: int = 1
+    api_selected_ids: set = field(default_factory=set)
+
+    bug_filter_kw: str = ''
+    bug_page: int = 1
+    bug_selected_ids: set = field(default_factory=set)
+
+state = AppState()
+
+# === UI Components & Layout ===
+loading_spinner = ui.spinner(size='lg', color='primary').classes('fixed inset-0 flex items-center justify-center bg-white/50').style('z-index: 9999')
+loading_spinner.visible = False
+
+def show_loading(): loading_spinner.visible = True
+def hide_loading(): loading_spinner.visible = False
+
 MENU_CONFIG = [
     {'path': '/home',     'label': '首頁',     'icon': 'home'},
     {'path': '/projects', 'label': '專案',     'icon': 'folder'},
@@ -22,9 +73,7 @@ MENU_CONFIG = [
     {'path': '/appcases', 'label': 'APP 案例', 'icon': 'smartphone'},
     {'path': '/apicases', 'label': 'API 案例', 'icon': 'api'},
     {'path': '/bugs',     'label': 'BUG',      'icon': 'bug_report'},
-    {'path': '/reports',  'label': '報表',     'icon': 'bar_chart'},
     {'path': '/automation','label': '自動化',  'icon': 'bolt'},
-    {'path': '/loadtest', 'label': '壓力測試', 'icon': 'speed'},
     {'path': '/mock', 'label': 'Mock API', 'icon': 'construction'},
 ]
 
@@ -33,153 +82,217 @@ def render_sidebar(active_path: str):
         ui.label('測試管理平台').classes('text-lg font-semibold mb-2')
         for item in MENU_CONFIG:
             is_active = (item['path'] == active_path)
-            b = ui.button(item['label'], icon=item.get('icon'),
-                          on_click=lambda p=item['path']: ui.navigate.to(p)).classes('w-full justify-start')
-            if is_active:
-                b.props('unelevated color=primary')
-            else:
-                b.props('flat')
+            b = ui.button(item['label'], icon=item.get('icon'), on_click=lambda p=item['path']: ui.navigate.to(p)).classes('w-full justify-start')
+            b.props('unelevated color=primary' if is_active else 'flat')
 
-async def render_layout(active_path: str, content_builder):
-    try:
-        show_loading()
-    except Exception:
-        pass
+async def render_layout(active_path: str, content_builder: Callable):
+    show_loading()
     with ui.header().classes('items-center justify-between px-4 shadow-sm'):
         ui.label('測試管理平台').classes('text-lg font-semibold')
     with ui.row().classes('w-full no-wrap'):
-        with ui.column().classes('shrink-0'):
-            render_sidebar(active_path)
+        render_sidebar(active_path)
         with ui.column().classes('w-full p-4'):
-            with ui.element('div').classes('w-full') as main_area:
-                await content_builder(main_area)
-    try:
-        hide_loading()
-    except Exception:
-        pass
+            await content_builder()
+    hide_loading()
 
-ui.add_head_html('<link rel="icon" href="data:image/svg+xml,%3Csvg xmlns=%22http://www.w3.org/2000/svg%22 viewBox=%220 0 64 64%22%3E%3Crect width=%2264%22 height=%2264%22 rx=%2212%22 fill=%22%234F46E5%22/%3E%3Ctext x=%2232%22 y=%2238%22 font-size=%2232%22 text-anchor=%22middle%22 fill=%22white%22%3ET%3C/text%3E%3C/svg%3E" />')
+# === Page Renderers ===
 
-def setup_theme():
-    ui.colors(
-        primary='#4F46E5',
-        secondary='#0EA5E9',
-        accent='#22C55E',
-        positive='#22C55E',
-        negative='#EF4444',
-        warning='#F59E0B',
-        info='#3B82F6',
-    )
-    ui.add_css(".soft-card{ background:#fff;border:1px solid rgba(0,0,0,.06); box-shadow:0 4px 12px rgba(0,0,0,.05);border-radius:16px; }")
+async def render_projects():
+    async def refresh_data():
+        show_loading()
+        try:
+            state.projects = await api.list_projects()
+            table.rows = state.projects
+            table.update()
+        except Exception as e:
+            ui.notify(f"Failed to load projects: {e}", type='negative')
+        finally:
+            hide_loading()
 
-loading_spinner = ui.spinner(size='lg', color='primary').classes('fixed inset-0 flex items-center justify-center bg-white/50').style('z-index: 9999')
-loading_spinner.visible = False
+    async def delete_project(project_id: int):
+        show_loading()
+        try:
+            await api.delete_project(project_id)
+            ui.notify(f"Deleted project {project_id}", type='positive')
+            await refresh_data()
+        except Exception as e:
+            ui.notify(f"Failed to delete project: {e}", type='negative')
+        finally:
+            hide_loading()
 
-def show_loading():
-    loading_spinner.visible = True
+    def open_project_dialog(editing_project: Dict | None = None):
+        with ui.dialog() as d, ui.card():
+            ui.label('新增專案' if not editing_project else '修改專案').classes('text-lg font-semibold')
+            name_input = ui.input('專案名稱', value=editing_project.get('name') if editing_project else '').props('outlined dense')
+            owner_input = ui.input('人員', value=editing_project.get('owner') if editing_project else '').props('outlined dense')
+            status_select = ui.select(['新增','進行中','暫停','完成'], label='專案狀態', value=editing_project.get('status') if editing_project else '新增').props('outlined dense')
 
-def hide_loading():
-    loading_spinner.visible = False
+            async def save():
+                payload = {'name': name_input.value, 'owner': owner_input.value, 'status': status_select.value}
+                show_loading()
+                try:
+                    if editing_project:
+                        await api.update_project(editing_project['id'], payload)
+                    else:
+                        await api.create_project(payload)
+                    d.close()
+                    await refresh_data()
+                except Exception as e:
+                    ui.notify(f"Failed to save project: {e}", type="negative")
+                finally:
+                    hide_loading()
 
-def page_header(title: str, subtitle: str | None = None, actions: list | None = None):
-    with ui.element('div').classes('page-header'):
-        with ui.element('div'):
-            ui.label(title).classes('text-2xl font-bold')
-            if subtitle:
-                ui.label(subtitle).classes('text-gray-500')
-        with ui.row().classes('items-center gap-2'):
-            if actions:
-                for a in actions: a()
+            with ui.row().classes('justify-end w-full mt-4'):
+                ui.button('取消', on_click=d.close)
+                ui.button('儲存', on_click=save, color='primary')
+        d.open()
 
-from dataclasses import dataclass, field
-from typing import List, Dict, Callable, Optional
+    page_header("專案管理", "建立、編輯和管理您的測試專案。")
 
-@dataclass
-class AppState:
-    active_project_id: int = 1
-    active_project_name: str = '未選取'
-    projects: List[Dict] = field(default_factory=list)
-    web_list: List[Dict] = field(default_factory=list)
-    app_list: List[Dict] = field(default_factory=list)
-    api_list: List[Dict] = field(default_factory=list)
-    bug_list: List[Dict] = field(default_factory=list)
-    prj_kw: str = ''
-    prj_page: int = 1
-    prj_page_size: int = 10
-    web_kw: str = ''
-    web_page: int = 1
-    app_kw: str = ''
-    app_page: int = 1
-    api_kw: str = ''
-    api_page: int = 1
-    bug_filter_kw: str = ''
-    bug_page: int = 1
-    web_selected_ids: set = field(default_factory=set)
-    app_selected_ids: set = field(default_factory=set)
-    api_selected_ids: set = field(default_factory=set)
-    bug_selected_ids: set = field(default_factory=set)
-    prj_selected_ids: set = field(default_factory=set)
+    with ui.row().classes('w-full items-center'):
+        ui.button('新增專案', icon='add', on_click=lambda: open_project_dialog()).props('color=primary')
+        ui.space()
+        ui.input(placeholder='搜尋專案...').props('dense outlined').bind_value(state, 'prj_kw').on('keydown.enter', refresh_data)
 
-state = AppState()
 
-async def load_initial_project():
-    try:
-        projects = await api.list_projects()
-        state.projects = projects
-        if projects:
-            first = projects[0]
-            state.active_project_id = int(first.get('id', 1))
-            state.active_project_name = first.get('name', f'專案 {state.active_project_id}')
-        else:
-            state.active_project_id = 1
-            state.active_project_name = '未選取'
-    except Exception as e:
-        state.active_project_id = 1
-        state.active_project_name = f'無法載入專案: {e}'
-        state.projects = []
+    columns = [
+        {'name': 'id', 'label': 'ID', 'field': 'id', 'sortable': True},
+        {'name': 'name', 'label': '專案名稱', 'field': 'name', 'sortable': True, 'align': 'left'},
+        {'name': 'owner', 'label': '人員', 'field': 'owner', 'sortable': True, 'align': 'left'},
+        {'name': 'status', 'label': '狀態', 'field': 'status', 'sortable': True},
+        {'name': 'actions', 'label': '操作', 'field': 'actions'},
+    ]
 
-app.on_startup(load_initial_project)
+    table = ui.table(columns=columns, rows=[], row_key='id').classes('w-full')
+    table.add_slot('body-cell-actions', '''
+        <q-td :props="props">
+            <q-btn flat dense round icon="edit" @click="() => $parent.$emit('edit', props.row)" />
+            <q-btn flat dense round icon="delete" @click="() => $parent.$emit('delete', props.row)" />
+        </q-td>
+    ''')
 
-def empty_state(title: str, tip: str, action_text: str, on_click):
-    with ui.card().classes('soft-card p-8 items-center'):
-        ui.icon('inbox').classes('text-4xl opacity-50')
-        ui.label(title).classes('text-lg font-semibold mt-2')
-        ui.label(tip).classes('text-gray-500')
-        ui.button(action_text, icon='add', color='primary', on_click=on_click).classes('mt-3')
+    table.on('edit', lambda e: open_project_dialog(e.args))
+    table.on('delete', lambda e: delete_project(e.args['id']))
 
-# All render functions are now async
-async def render_projects(main_area):
-    ui.label(f'目前專案：{state.active_project_name}').classes('text-sm opacity-70')
-    ui.separator()
-    # ... (rest of the async render_projects function)
-    # This is a placeholder for the sake of brevity. The actual implementation is complex.
-    ui.label("Projects will be rendered here.")
+    await refresh_data()
 
-async def render_web_cases(main_area):
-    ui.label("Web cases will be rendered here.")
+async def render_web_cases():
+    async def refresh_data():
+        show_loading()
+        try:
+            result = await api.list_web_cases(state.active_project_id, keyword=state.web_kw)
+            table.rows = result.get('items', [])
+            # Here you might want to update a label with the total count from result.get('total')
+            table.update()
+        except Exception as e:
+            ui.notify(f"Failed to load web cases: {e}", type='negative')
+        finally:
+            hide_loading()
 
-async def render_app_cases(main_area):
-    ui.label("App cases will be rendered here.")
+    # ... (Dialogs and handlers for create/update/delete)
 
-async def render_api_cases(main_area):
-    ui.label("API cases will be rendered here.")
+    page_header("WEB 案例", f"專案: {state.active_project_name}")
 
-async def render_bugs(main_area):
-    ui.label("Bugs will be rendered here.")
+    with ui.row().classes('w-full items-center'):
+        # ui.button('新增案例', icon='add', on_click=lambda: open_dialog()).props('color=primary')
+        ui.space()
+        ui.input(placeholder='搜尋案例...').props('dense outlined').bind_value(state, 'web_kw').on('keydown.enter', refresh_data)
 
-async def render_reports(main_area):
-    ui.label("Reports will be rendered here.")
+    columns = [
+        {'name': 'id', 'label': 'ID', 'field': 'id', 'sortable': True},
+        {'name': 'test_feature', 'label': '測試功能', 'field': 'test_feature', 'align': 'left'},
+        {'name': 'action', 'label': '動作', 'field': 'action'},
+        {'name': 'page', 'label': '頁面', 'field': 'page'},
+        {'name': 'element', 'label': '元件', 'field': 'element'},
+    ]
 
-async def render_automation(main_area):
-    ui.label("Automation will be rendered here.")
+    table = ui.table(columns=columns, rows=[], row_key='id').classes('w-full')
 
-async def render_loadtest(main_area):
-    ui.label("Loadtest will be rendered here.")
+    await refresh_data()
 
-async def render_mock_page(main_area):
-    ui.label("Mock page will be rendered here.")
+async def render_app_cases():
+    async def refresh_data():
+        show_loading()
+        try:
+            result = await api.list_app_cases(state.active_project_id, keyword=state.app_kw)
+            table.rows = result.get('items', [])
+            table.update()
+        except Exception as e:
+            ui.notify(f"Failed to load app cases: {e}", type='negative')
+        finally:
+            hide_loading()
 
-async def render_home(main_area):
+    page_header("APP 案例", f"專案: {state.active_project_name}")
+    with ui.row().classes('w-full items-center'):
+        ui.space()
+        ui.input(placeholder='搜尋案例...').props('dense outlined').bind_value(state, 'app_kw').on('keydown.enter', refresh_data)
+
+    columns = [
+        {'name': 'id', 'label': 'ID', 'field': 'id', 'sortable': True},
+        {'name': 'test_feature', 'label': '測試功能', 'field': 'test_feature', 'align': 'left'},
+    ]
+    table = ui.table(columns=columns, rows=[], row_key='id').classes('w-full')
+    await refresh_data()
+
+async def render_api_cases():
+    async def refresh_data():
+        show_loading()
+        try:
+            result = await api.list_api_cases(state.active_project_id, keyword=state.api_kw)
+            table.rows = result.get('items', [])
+            table.update()
+        except Exception as e:
+            ui.notify(f"Failed to load api cases: {e}", type='negative')
+        finally:
+            hide_loading()
+
+    page_header("API 案例", f"專案: {state.active_project_name}")
+    with ui.row().classes('w-full items-center'):
+        ui.space()
+        ui.input(placeholder='搜尋案例...').props('dense outlined').bind_value(state, 'api_kw').on('keydown.enter', refresh_data)
+
+    columns = [
+        {'name': 'id', 'label': 'ID', 'field': 'id', 'sortable': True},
+        {'name': 'test_feature', 'label': '測試功能', 'field': 'test_feature', 'align': 'left'},
+        {'name': 'method', 'label': '方法', 'field': 'method'},
+        {'name': 'api_path', 'label': 'API路徑', 'field': 'api_path'},
+    ]
+    table = ui.table(columns=columns, rows=[], row_key='id').classes('w-full')
+    await refresh_data()
+
+async def render_bugs():
+    async def refresh_data():
+        show_loading()
+        try:
+            state.bug_list = await api.list_project_bugs(state.active_project_id, keyword=state.bug_filter_kw)
+            table.rows = state.bug_list
+            table.update()
+        except Exception as e:
+            ui.notify(f"Failed to load bugs: {e}", type='negative')
+        finally:
+            hide_loading()
+
+    page_header("BUG 管理", f"專案: {state.active_project_name}")
+    with ui.row().classes('w-full items-center'):
+        ui.space()
+        ui.input(placeholder='搜尋 BUG...').props('dense outlined').bind_value(state, 'bug_filter_kw').on('keydown.enter', refresh_data)
+
+    columns = [
+        {'name': 'id', 'label': 'ID', 'field': 'id', 'sortable': True},
+        {'name': 'description', 'label': '問題敘述', 'field': 'description', 'align': 'left'},
+        {'name': 'severity', 'label': '嚴重度', 'field': 'severity'},
+        {'name': 'status', 'label': '狀態', 'field': 'status'},
+    ]
+    table = ui.table(columns=columns, rows=[], row_key='id').classes('w-full')
+    await refresh_data()
+
+async def render_automation():
+    ui.label("Automation Page Content")
+
+async def render_mock_page():
+    ui.label("Mock API Page Content")
+
+async def render_home():
     with ui.column().classes('w-full gap-2'):
         ui.label('歡迎使用 測試管理平台').classes('text-h5')
         ui.label('請從左側選單選擇要進入的功能，或使用下方快速選單。').classes('text-body2')
@@ -187,63 +300,52 @@ async def render_home(main_area):
             ui.button('專案管理', icon='folder', on_click=lambda: ui.navigate.to('/projects'))
             ui.button('BUG 管理', icon='bug_report', on_click=lambda: ui.navigate.to('/bugs'))
 
+# === Page Routes ===
+
 @ui.page('/')
 def page_index():
-    setup_theme()
     return ui.navigate.to('/home')
 
 @ui.page('/home')
 async def page_home():
-    setup_theme()
     await render_layout('/home', render_home)
 
 @ui.page('/projects')
 async def page_projects():
-    setup_theme()
     await render_layout('/projects', render_projects)
 
 @ui.page('/webcases')
 async def page_webcases():
-    setup_theme()
     await render_layout('/webcases', render_web_cases)
 
 @ui.page('/appcases')
 async def page_appcases():
-    setup_theme()
     await render_layout('/appcases', render_app_cases)
 
 @ui.page('/apicases')
 async def page_apicases():
-    setup_theme()
     await render_layout('/apicases', render_api_cases)
 
 @ui.page('/bugs')
 async def page_bugs():
-    setup_theme()
     await render_layout('/bugs', render_bugs)
-
-@ui.page('/reports')
-async def page_reports():
-    setup_theme()
-    await render_layout('/reports', render_reports)
 
 @ui.page('/automation')
 async def page_automation():
-    setup_theme()
     await render_layout('/automation', render_automation)
-
-@ui.page('/loadtest')
-async def page_loadtest():
-    setup_theme()
-    await render_layout('/loadtest', render_loadtest)
 
 @ui.page('/mock')
 async def page_mock():
-    setup_theme()
     await render_layout('/mock', render_mock_page)
 
+# === App Startup ===
+
+async def startup_tasks():
+    await load_initial_project()
+    # Any other async startup tasks can go here
+
+app.on_startup(startup_tasks)
+
 if __name__ in {"__main__", "__mp_main__"}:
-    import os
-    # Change default port to 8081 to avoid conflict with backend on 8000
     port = int(os.environ.get('PORT', 8081))
     ui.run(host='127.0.0.1', port=port, reload=False, title="測試平台")
