@@ -63,7 +63,7 @@ def _favicon():
 @app.on_event("startup")
 async def on_startup():
     """Initialize the database when the application starts."""
-    init_db()
+    await init_db()
 
 app.add_middleware(
     CORSMiddleware,
@@ -212,79 +212,79 @@ def health():
 
 # ---------- Projects CRUD ----------
 @app.get("/projects")
-def api_list_projects(q: Optional[str] = None, owner: Optional[str] = None, status: Optional[str] = None):
-    return list_projects(keyword=q, owner=owner, status=status)
+async def api_list_projects(q: Optional[str] = None, owner: Optional[str] = None, status: Optional[str] = None):
+    return await list_projects(keyword=q, owner=owner, status=status)
 
 @app.get("/projects/{pid}")
-def api_get_project(pid: int):
-    p = get_project(pid)
+async def api_get_project(pid: int):
+    p = await get_project(pid)
     if not p:
         raise HTTPException(status_code=404, detail="Project not found")
     return p
 
 @app.post("/projects")
-def api_create_project(payload: ProjectIn):
-    return create_project(payload.dict())
+async def api_create_project(payload: ProjectIn):
+    return await create_project(payload.dict())
 
 @app.put("/projects/{pid}")
-def api_update_project(pid: int, payload: ProjectIn):
-    p = update_project(pid, payload.dict())
+async def api_update_project(pid: int, payload: ProjectIn):
+    p = await update_project(pid, payload.dict())
     if not p:
         raise HTTPException(status_code=404, detail="Project not found")
     return p
 
 @app.delete("/projects/{pid}")
-def api_delete_project(pid: int):
-    delete_project(pid)
+async def api_delete_project(pid: int):
+    await delete_project(pid)
     return {"ok": True}
 
 # ---------- Bugs CRUD ----------
 @app.get("/bugs")
-def api_list_bugs(q: Optional[str] = None):
-    return list_bugs(q)
+async def api_list_bugs(q: Optional[str] = None):
+    return await list_bugs(q)
 
 @app.get("/bugs/{bid}")
-def api_get_bug(bid: int):
-    b = get_bug(bid)
+async def api_get_bug(bid: int):
+    b = await get_bug(bid)
     if not b:
         raise HTTPException(status_code=404, detail="Bug not found")
     return b
 
 @app.post("/bugs")
-def api_create_bug(payload: BugIn):
-    return create_bug(payload.dict())
+async def api_create_bug(payload: BugIn):
+    return await create_bug(payload.dict())
 
 @app.put("/bugs/{bid}")
-def api_update_bug(bid: int, payload: BugIn):
-    b = update_bug(bid, payload.dict())
+async def api_update_bug(bid: int, payload: BugIn):
+    b = await update_bug(bid, payload.dict())
     if not b:
         raise HTTPException(status_code=404, detail="Bug not found")
     return b
 
 @app.delete("/bugs/{bid}")
-def api_delete_bug(bid: int):
-    delete_bug(bid)
+async def api_delete_bug(bid: int):
+    await delete_bug(bid)
     return {"ok": True}
 
 # ---------- Runs CRUD ----------
 @app.get("/runs")
-def api_list_runs(q: Optional[str] = None):
-    return list_runs(q)
+async def api_list_runs(q: Optional[str] = None):
+    return await list_runs(q)
 
 @app.post("/runs")
-def api_create_run(payload: RunIn):
-    return create_run(payload.dict())
+async def api_create_run(payload: RunIn):
+    return await create_run(payload.dict())
 
 @app.put("/runs/{rid}")
-def api_update_run(rid: int, payload: RunIn):
-    r = update_run(rid, payload.dict())
+async def api_update_run(rid: int, payload: RunIn):
+    r = await update_run(rid, payload.dict())
     if not r:
         raise HTTPException(status_code=404, detail="Run not found")
     return r
 
 @app.delete("/runs/{rid}")
-def api_delete_run(rid: int):
-    delete_run(rid)
+async def api_delete_run(rid: int):
+    await delete_run(rid)
     return {"ok": True}
 
 # ---------- File upload (for bug screenshots or other attachments) ----------
@@ -324,7 +324,7 @@ else:
 
 # ---------- Project‑scoped Web Cases ----------
 @app.get("/projects/{pid}/webcases")
-def api_list_web_cases(
+async def api_list_web_cases(
     pid: int,
     q: Optional[str] = None,
     action: Optional[str] = None,
@@ -338,7 +338,7 @@ def api_list_web_cases(
         filters["action"] = set([x for x in action.split(",") if x])
     if result:
         filters["result"] = set([x for x in result.split(",") if x])
-    cases = list_cases(WEB_CASES_PATH, pid, q, filters)
+    cases = await list_cases(WEB_CASES_PATH, pid, q, filters)
     total = len(cases)
     # pagination
     if page < 1:
@@ -350,21 +350,21 @@ def api_list_web_cases(
     return {"total": total, "items": cases[start:end]}
 
 @app.get("/projects/{pid}/webcases/names")
-def api_list_web_case_names(pid: int):
+async def api_list_web_case_names(pid: int):
     """Return a lightweight list of web cases (id and name) for a project."""
-    cases = list_cases(WEB_CASES_PATH, pid)
+    cases = await list_cases(WEB_CASES_PATH, pid, None, None)
     # The name is in 'feature' or 'test_feature'
     return [{"id": c.get("id"), "name": c.get("feature") or c.get("test_feature") or ""} for c in cases]
 
 @app.post("/projects/{pid}/webcases")
-def api_create_web_case(pid: int, payload: WebCaseIn):
-    case = create_case(WEB_CASES_PATH, pid, payload.dict(), id_field="id")
+async def api_create_web_case(pid: int, payload: WebCaseIn):
+    case = await create_case(WEB_CASES_PATH, pid, payload.dict(), id_field="id")
     return case
 
 @app.put("/projects/{pid}/webcases/{case_id}")
-def api_update_web_case(pid: int, case_id: int, payload: WebCaseIn):
+async def api_update_web_case(pid: int, case_id: int, payload: WebCaseIn):
     # State locking: prevent changes if status is '已審核'
-    current_case = get_case(WEB_CASES_PATH, pid, case_id, id_field="id")
+    current_case = await get_case(WEB_CASES_PATH, pid, case_id, id_field="id")
     if not current_case:
         raise HTTPException(status_code=404, detail="Web case not found")
 
@@ -375,17 +375,17 @@ def api_update_web_case(pid: int, case_id: int, payload: WebCaseIn):
     if is_reviewed and "review" in payload_dict and payload_dict["review"] != "已審核":
         raise HTTPException(status_code=403, detail="此案例已審核，無法修改狀態。")
 
-    case = update_case(WEB_CASES_PATH, pid, case_id, payload_dict, id_field="id")
+    case = await update_case(WEB_CASES_PATH, pid, case_id, payload_dict, id_field="id")
     return case
 
 @app.delete("/projects/{pid}/webcases/{case_id}")
-def api_delete_web_case(pid: int, case_id: int):
-    ok = delete_case(WEB_CASES_PATH, pid, case_id, id_field="id")
+async def api_delete_web_case(pid: int, case_id: int):
+    ok = await delete_case(WEB_CASES_PATH, pid, case_id, id_field="id")
     return {"ok": ok}
 
 # ---------- Project‑scoped App Cases ----------
 @app.get("/projects/{pid}/appcases")
-def api_list_app_cases(
+async def api_list_app_cases(
     pid: int,
     q: Optional[str] = None,
     action: Optional[str] = None,
@@ -398,27 +398,27 @@ def api_list_app_cases(
         filters["action"] = set([x for x in action.split(",") if x])
     if result:
         filters["result"] = set([x for x in result.split(",") if x])
-    cases = list_cases(APP_CASES_PATH, pid, q, filters)
+    cases = await list_cases(APP_CASES_PATH, pid, q, filters)
     total = len(cases)
     start = max((page - 1), 0) * page_size
     end = start + page_size
     return {"total": total, "items": cases[start:end]}
 
 @app.get("/projects/{pid}/appcases/names")
-def api_list_app_case_names(pid: int):
+async def api_list_app_case_names(pid: int):
     """Return a lightweight list of app cases (id and name) for a project."""
-    cases = list_cases(APP_CASES_PATH, pid)
+    cases = await list_cases(APP_CASES_PATH, pid, None, None)
     return [{"id": c.get("id"), "name": c.get("feature") or c.get("test_feature") or ""} for c in cases]
 
 @app.post("/projects/{pid}/appcases")
-def api_create_app_case(pid: int, payload: AppCaseIn):
-    case = create_case(APP_CASES_PATH, pid, payload.dict(), id_field="id")
+async def api_create_app_case(pid: int, payload: AppCaseIn):
+    case = await create_case(APP_CASES_PATH, pid, payload.dict(), id_field="id")
     return case
 
 @app.put("/projects/{pid}/appcases/{case_id}")
-def api_update_app_case(pid: int, case_id: int, payload: AppCaseIn):
+async def api_update_app_case(pid: int, case_id: int, payload: AppCaseIn):
     # State locking: prevent changes if status is '已審核'
-    current_case = get_case(APP_CASES_PATH, pid, case_id, id_field="id")
+    current_case = await get_case(APP_CASES_PATH, pid, case_id, id_field="id")
     if not current_case:
         raise HTTPException(status_code=404, detail="App case not found")
 
@@ -428,17 +428,17 @@ def api_update_app_case(pid: int, case_id: int, payload: AppCaseIn):
     if is_reviewed and "review" in payload_dict and payload_dict["review"] != "已審核":
         raise HTTPException(status_code=403, detail="此案例已審核，無法修改狀態。")
 
-    case = update_case(APP_CASES_PATH, pid, case_id, payload_dict, id_field="id")
+    case = await update_case(APP_CASES_PATH, pid, case_id, payload_dict, id_field="id")
     return case
 
 @app.delete("/projects/{pid}/appcases/{case_id}")
-def api_delete_app_case(pid: int, case_id: int):
-    ok = delete_case(APP_CASES_PATH, pid, case_id, id_field="id")
+async def api_delete_app_case(pid: int, case_id: int):
+    ok = await delete_case(APP_CASES_PATH, pid, case_id, id_field="id")
     return {"ok": ok}
 
 # ---------- Project‑scoped API Cases ----------
 @app.get("/projects/{pid}/apicases")
-def api_list_api_cases(
+async def api_list_api_cases(
     pid: int,
     q: Optional[str] = None,
     method: Optional[str] = None,
@@ -451,28 +451,28 @@ def api_list_api_cases(
         filters["method"] = set([x for x in method.split(",") if x])
     if result:
         filters["result"] = set([x for x in result.split(",") if x])
-    cases = list_cases(API_CASES_PATH, pid, q, filters)
+    cases = await list_cases(API_CASES_PATH, pid, q, filters)
     total = len(cases)
     start = max((page - 1), 0) * page_size
     end = start + page_size
     return {"total": total, "items": cases[start:end]}
 
 @app.get("/projects/{pid}/apicases/names")
-def api_list_api_case_names(pid: int):
+async def api_list_api_case_names(pid: int):
     """Return a lightweight list of api cases (id and name) for a project."""
-    cases = list_cases(API_CASES_PATH, pid)
+    cases = await list_cases(API_CASES_PATH, pid, None, None)
     # API cases use 'step' as their ID field
     return [{"id": c.get("step"), "name": c.get("feature") or c.get("test_feature") or ""} for c in cases]
 
 @app.post("/projects/{pid}/apicases")
-def api_create_api_case(pid: int, payload: ApiCaseIn):
-    case = create_case(API_CASES_PATH, pid, payload.dict(), id_field="step")
+async def api_create_api_case(pid: int, payload: ApiCaseIn):
+    case = await create_case(API_CASES_PATH, pid, payload.dict(), id_field="id") # Using 'id' now
     return case
 
-@app.put("/projects/{pid}/apicases/{step}")
-def api_update_api_case(pid: int, step: int, payload: ApiCaseIn):
+@app.put("/projects/{pid}/apicases/{case_id}")
+async def api_update_api_case(pid: int, case_id: int, payload: ApiCaseIn):
     # State locking: prevent changes if status is '已審核'
-    current_case = get_case(API_CASES_PATH, pid, step, id_field="step")
+    current_case = await get_case(API_CASES_PATH, pid, case_id, id_field="id")
     if not current_case:
         raise HTTPException(status_code=404, detail="API case not found")
 
@@ -482,23 +482,23 @@ def api_update_api_case(pid: int, step: int, payload: ApiCaseIn):
     if is_reviewed and "review" in payload_dict and payload_dict["review"] != "已審核":
         raise HTTPException(status_code=403, detail="此案例已審核，無法修改狀態。")
 
-    case = update_case(API_CASES_PATH, pid, step, payload_dict, id_field="step")
+    case = await update_case(API_CASES_PATH, pid, case_id, payload_dict, id_field="id")
     return case
 
-@app.delete("/projects/{pid}/apicases/{step}")
-def api_delete_api_case(pid: int, step: int):
-    ok = delete_case(API_CASES_PATH, pid, step, id_field="step")
+@app.delete("/projects/{pid}/apicases/{case_id}")
+async def api_delete_api_case(pid: int, case_id: int):
+    ok = await delete_case(API_CASES_PATH, pid, case_id, id_field="id")
     return {"ok": ok}
 
 # ---------- Project‑scoped APP Device Info ----------
 @app.get("/projects/{pid}/app-device")
-def api_get_app_device(pid: int):
-    info = get_app_device(pid) or ""
+async def api_get_app_device(pid: int):
+    info = await get_app_device(pid) or ""
     return {"device": info}
 
 @app.post("/projects/{pid}/app-device")
-def api_set_app_device(pid: int, device: str):
-    set_app_device(pid, device)
+async def api_set_app_device(pid: int, device: str):
+    await set_app_device(pid, device)
     return {"ok": True}
 
 # ---------- Mock API ----------
@@ -517,32 +517,32 @@ class MockRequest(BaseModel):
     delay_ms: int = 0
 
 @app.get("/api/mocks")
-def api_get_mocks():
+async def api_get_mocks():
     """Returns the list of all configured mocks."""
-    return get_all_mocks()
+    return await get_all_mocks()
 
 @app.post("/api/mock")
-def api_create_mock(payload: MockRequest):
+async def api_create_mock(payload: MockRequest):
     """Saves a new mock configuration."""
     mock_data = payload.dict()
-    return save_mock(mock_data)
+    return await save_mock(mock_data)
 
 
 # ---------- Project‑scoped Bugs ----------
 @app.get("/projects/{pid}/bugs")
-def api_list_project_bugs(pid: int, q: Optional[str] = None, severity: Optional[str] = None, status: Optional[str] = None):
+async def api_list_project_bugs(pid: int, q: Optional[str] = None, severity: Optional[str] = None, status: Optional[str] = None):
     """List bugs for a project. Optionally filter by keyword in description, repro, expected or actual."""
-    return list_project_bugs(pid, keyword=q, severity=severity, status=status)
+    return await list_project_bugs(pid, keyword=q, severity=severity, status=status)
 
 @app.post("/projects/{pid}/bugs")
-def api_create_project_bug(pid: int, payload: ProjectBugIn):
-    bug = create_project_bug(pid, payload.dict())
+async def api_create_project_bug(pid: int, payload: ProjectBugIn):
+    bug = await create_project_bug(pid, payload.dict())
     return bug
 
 @app.put("/projects/{pid}/bugs/{bug_id}")
-def api_update_project_bug(pid: int, bug_id: int, payload: ProjectBugIn):
+async def api_update_project_bug(pid: int, bug_id: int, payload: ProjectBugIn):
     # State locking: prevent changes if status is '已審核'
-    current_bug = get_project_bug(pid, bug_id)
+    current_bug = await get_project_bug(pid, bug_id)
     if not current_bug:
         raise HTTPException(status_code=404, detail="Bug not found")
 
@@ -552,12 +552,12 @@ def api_update_project_bug(pid: int, bug_id: int, payload: ProjectBugIn):
     if is_reviewed and "status" in payload_dict and payload_dict["status"] != "已審核":
         raise HTTPException(status_code=403, detail="此BUG已審核，無法修改狀態。")
 
-    bug = update_project_bug(pid, bug_id, payload_dict)
+    bug = await update_project_bug(pid, bug_id, payload_dict)
     return bug
 
 @app.delete("/projects/{pid}/bugs/{bug_id}")
-def api_delete_project_bug(pid: int, bug_id: int):
-    ok = delete_project_bug(pid, bug_id)
+async def api_delete_project_bug(pid: int, bug_id: int):
+    ok = await delete_project_bug(pid, bug_id)
     return {"ok": ok}
 
 # ---------- Allure: results & report ----------

@@ -282,7 +282,7 @@ async def load_initial_project():
         state.projects = []
 
 # This runs once when the app starts
-asyncio.create_task(load_initial_project())
+app.on_startup(load_initial_project)
 
 # --------- 共用 UI 元件 ---------
 def confirm(title: str, text: str, on_ok: Callable[[], None]):
@@ -358,6 +358,7 @@ async def render_projects(main_area):
             hide_loading()
 
     def render_table(items):
+        total_label.text = f"總數：{len(items)}"
         page_size = max(1, int(state.prj_page_size or 10))
         total = len(items)
         max_page = max(1, (total + page_size - 1) // page_size)
@@ -366,7 +367,7 @@ async def render_projects(main_area):
         page_rows = items[start:start+page_size]
 
         bulk_toolbar(state.prj_selected_ids, [
-            ('刪除選取', 'delete', bulk_delete),
+            ('刪除選取', 'delete', lambda: bulk_delete(items)),
             ('清除選取', 'close', lambda: (state.prj_selected_ids.clear(), asyncio.create_task(refresh_projects()))),
         ])
 
@@ -414,12 +415,13 @@ async def render_projects(main_area):
             with ui.element('div').classes('w-28'):
                 status_badge(r.get('status','新增'), {'新增':'info','進行中':'primary','暫停':'warning','完成':'positive'})
             with ui.row().classes('w-32 gap-1'):
-                async def switch_proj(_rid=rid):
+                async def switch_proj(_rid=rid, _name=r.get('name')):
                     state.active_project_id = _rid
-                    await load_initial_project() # Reload project info
-                    ui.navigate.reload()
+                    state.active_project_name = _name
+                    # Just reload the app, the startup logic will handle the rest.
+                    ui.navigate.to('/projects')
                 ui.button(icon='swap_horiz', on_click=switch_proj).props('flat')
-                ui.button(icon='edit', on_click=lambda rid=rid: open_project_dialog(rid)).props('flat')
+                ui.button(icon='edit', on_click=lambda r=r: open_project_dialog(r.get('id'))).props('flat')
                 async def del_one(_rid=rid):
                     show_loading()
                     try:
@@ -433,7 +435,7 @@ async def render_projects(main_area):
                         hide_loading()
                 ui.button(icon='delete', on_click=del_one).props('flat')
 
-    async def bulk_delete():
+    async def bulk_delete(items):
         ids_to_delete = list(state.prj_selected_ids)
         if not ids_to_delete: return
         show_loading()
@@ -488,39 +490,11 @@ async def render_projects(main_area):
 
     # ---- Search bar ----
     with ui.row().classes('gap-2 items-end flex-wrap'):
-        name_in = ui.input('專案名稱').props('dense outlined').classes('min-w-[200px]')
-        name_in.value = state.prj_kw
-
-        async def do_query():
-            show_loading()
-            try:
-                state.prj_kw = name_in.value or ''
-                state.prj_page = 1
-                state.projects = await api.list_projects(keyword=state.prj_kw)
-                await api.log_action(f"Searched projects with keyword: {state.prj_kw}")
-                refresh()
-                ui.notify('查詢完成', type='positive')
-            except Exception as e:
-                ui.notify(f'查詢失敗: {e}', type='negative')
-            finally:
-                hide_loading()
-
-        async def do_clear():
-            show_loading()
-            try:
-                state.prj_kw = ''
-                name_in.value = ''
-                state.prj_page = 1
-                state.projects = await api.list_projects() # Fetch all
-                refresh()
-            finally:
-                hide_loading()
-
-        ui.button('查詢', icon='search', on_click=do_query).props('color=primary')
-        ui.button('清除搜尋條件', icon='backspace', on_click=do_clear).props('flat')
+        ui.input('專案名稱', on_change=refresh_projects).bind_value(state, 'prj_kw').props('dense outlined')
         ui.button('新增', icon='add', on_click=lambda: open_project_dialog()).props('color=accent')
         ui.space().classes('grow')
-        ui.label(f"總數：{len(items)}").classes('muted')
+        # This label will be updated inside render_table
+        total_label = ui.label('').classes('muted')
 
     ui.space().classes('h-2')
 
